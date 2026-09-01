@@ -1,0 +1,23 @@
+#!/bin/bash
+# Live dashboard of local Claude automations (launchd agents, logs, hooks).
+#   workflows            open the dashboard as a chromeless app window
+#                        (starts/kickstarts the launchd server if it's down)
+#   workflows --dump     print the HTML once to stdout
+#   workflows --port N   serve manually on another port (see --help)
+URL="http://127.0.0.1:8787"
+
+if [ $# -eq 0 ]; then
+  if ! curl -sf -m 2 -o /dev/null "$URL"; then
+    launchctl kickstart "gui/$(id -u)/__PREFIX__.claude-workflows" 2>/dev/null
+    for _ in 1 2 3 4 5; do
+      curl -sf -m 2 -o /dev/null "$URL" && break
+      sleep 1
+    done
+  fi
+  if [ -d "/Applications/Google Chrome.app" ]; then
+    exec open -na "Google Chrome" --args --app="$URL"
+  fi
+  exec open "$URL"
+fi
+
+exec python3 "$HOME/.claude/scripts/workflows-dashboard.py" "$@"

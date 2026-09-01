@@ -1,0 +1,4 @@
+#!/bin/bash
+# Claude Workflows.app — opens the workflows dashboard as an app window.
+# All logic lives in ~/.local/bin/workflows; this is just the Spotlight/Dock shim.
+exec "$HOME/.local/bin/workflows"
