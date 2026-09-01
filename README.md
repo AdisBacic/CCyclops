@@ -62,8 +62,8 @@ Cost: each job is one headless Claude session with a `--max-turns` cap. Typical 
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USER/claude-workflows.git
-cd claude-workflows
+git clone https://github.com/YOUR_USER/CCyclops.git
+cd CCyclops
 ./install.sh          # interactive — asks for your vault, org, calendars
 ./install.sh --dry-run  # see what it would do first
 ```
