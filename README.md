@@ -45,6 +45,27 @@ flowchart LR
     jobs -->|structured logs| D[dashboard :8787]
 ```
 
+## What it writes
+
+A made-up week of output is in [`examples/`](examples): a [daily note](examples/Workflows/Daily/2026-10-20.md) with the morning standup and the evening wrap-up, a [PR pre-review](examples/Workflows/Reviews/shop-PR482.md) that catches a rounding bug, the [ticket note](examples/Workflows/Tickets/1234%20Discount%20codes%20at%20checkout.md) the session hooks keep, and the [weekly rollup](examples/Workflows/Weekly/2026-W43.md). The part you paste into the team chat each morning:
+
+```text
+Yesterday:
+
+Discount codes at checkout - validation and tests done, up for review
+Found the cause of issue #1251 - order emails sent twice
+PR check - shipping rates refactor
+Sync with Priya on the Q4 release plan
+
+Today:
+
+Discount codes at checkout - review feedback
+Fix for issue #1251
+PR check - prices in cents
+Payments webhook pairing with Sam
+Guest checkout design review with Priya and Lea
+```
+
 ## Requirements
 
 | Dependency | Why | Install |
