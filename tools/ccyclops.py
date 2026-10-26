@@ -28,6 +28,7 @@ DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_GROUPS = {"daily": [], "weekdays": [1, 2, 3, 4, 5], "weekends": [6, 0]}
 # Values pasted into the !`shell` lines of commands/*.md must stay inside "...".
 UNSAFE = re.compile(r'["`$\\\n]')
+SCOPE_TERM = re.compile(r"(org|user):[\w.-]+|repo:[\w.-]+/[\w.-]+")
 
 
 def env(key: str, default: str = "") -> str:
@@ -141,14 +142,15 @@ def check(commands_dir: str, hooks_dir: str) -> int:
 
     if not env("VAULT"):
         errors.append("VAULT is empty — set it to the folder your notes should go in")
-    repo = env("MAIN_REPO")
-    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-        errors.append(f'MAIN_REPO="{repo}": use owner/name, e.g. "acme/webapp"')
-    elif repo.startswith("your-org/"):
-        warnings.append("MAIN_REPO is still the placeholder your-org/your-repo")
-    for key in ("PROJECTS_DIR", "MAIN_REPO_DIR"):
-        if not Path(env(key)).is_dir():
-            warnings.append(f"{key}={env(key)} doesn't exist — jobs fail their pre-flight check until it does")
+    scope = env("GITHUB_SCOPE").split()
+    bad = [t for t in scope if not SCOPE_TERM.fullmatch(t)]
+    if not scope or bad:
+        errors.append(f'GITHUB_SCOPE="{env("GITHUB_SCOPE")}": use org:NAME, user:NAME or repo:OWNER/NAME, '
+                      'separated by spaces, e.g. "org:acme" or "repo:acme/shop repo:acme/api"')
+    elif "org:your-org" in scope:
+        warnings.append("GITHUB_SCOPE is still the placeholder org:your-org")
+    if not Path(env("PROJECTS_DIR")).is_dir():
+        warnings.append(f"PROJECTS_DIR={env('PROJECTS_DIR')} doesn't exist — the commit feed reports an error until it does")
     if env("CALENDAR") == "true" and not shutil.which("icalBuddy"):
         warnings.append("CALENDAR=true but icalBuddy isn't installed — standup/wrapdown will refuse "
                         "to write (FEED FAILURE). brew install ical-buddy, or set CALENDAR=false")

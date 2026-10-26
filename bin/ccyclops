@@ -1,9 +1,9 @@
 #!/bin/bash
 # Live dashboard of local Claude automations (launchd agents, logs, hooks).
-#   workflows            open the dashboard as a chromeless app window
+#   ccyclops             open the dashboard as a chromeless app window
 #                        (starts/kickstarts the launchd server if it's down)
-#   workflows --dump     print the HTML once to stdout
-#   workflows --port N   serve manually on another port (see --help)
+#   ccyclops --dump      print the HTML once to stdout
+#   ccyclops --port N    serve manually on another port (see --help)
 # shellcheck source=/dev/null
 . "$HOME/.claude/ccyclops/config.sh" 2>/dev/null
 URL="http://127.0.0.1:${DASHBOARD_PORT:-8787}"

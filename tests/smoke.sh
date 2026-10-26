@@ -40,11 +40,17 @@ EOF
 cat > "$FAKE/claude" <<'EOF'
 #!/bin/bash
 # Logs its arguments one per line, answers like `claude -p --output-format json`.
-{ echo "--- call"; printf '%s\n' "$@"; } >> "$SANDBOX/claude.log"
+{ echo "--- call"; echo "cwd=$PWD"; printf '%s\n' "$@"; } >> "$SANDBOX/claude.log"
 jq -n --arg r "${FAKE_RESULT:-Wrote the note}" --argjson e "${FAKE_ERROR:-false}" \
   '{type: "result", is_error: $e, result: $r, total_cost_usd: 0.42, num_turns: 7, duration_ms: 12000, session_id: "s1"}'
 EOF
-printf '#!/bin/bash\nexit 0\n' > "$FAKE/gh"
+cat > "$FAKE/gh" <<'EOF'
+#!/bin/bash
+# Logs its arguments; FAKE_GH_FAIL=1 makes it fail like an expired token.
+echo "$*" >> "$SANDBOX/gh.log"
+if [ -n "${FAKE_GH_FAIL:-}" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 1; fi
+exit 0
+EOF
 printf '#!/bin/bash\nexit 0\n' > "$FAKE/osascript"
 chmod +x "$FAKE"/*
 
@@ -58,9 +64,8 @@ check "config.sh is the documented example" cmp -s "$CCYCLOPS_CONFIG" "$REPO/con
 cat > "$CCYCLOPS_CONFIG" <<EOF
 VAULT="\$HOME/My Vault"
 PROJECTS_DIR="\$HOME/Projects"
-MAIN_REPO="acme/widgets"
-MAIN_REPO_DIR="\$HOME/Projects/widgets"
-GITHUB_ORG="acme"
+GITHUB_SCOPE="org:acme repo:acme-labs/api"
+MODEL="haiku"
 JOB_PR_QUEUE="weekdays 08:40 13:00"
 JOB_WEEKLY="fri 16:00"
 CALENDAR=false
@@ -71,7 +76,11 @@ EOF
 mkdir -p "$HOME/.claude/scripts" "$HOME/.claude/commands" "$HOME/Projects/widgets"
 echo '{"model": "opus", "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "/usr/local/bin/my-hook"}]}]}}' \
   > "$HOME/.claude/settings.json"
-touch "$HOME/.claude/scripts/standup-cron.sh" "$HOME/.claude/commands/veckan.md"  # v1 leftovers
+# v1 leftovers, including its app and launcher under their old names
+touch "$HOME/.claude/scripts/standup-cron.sh" "$HOME/.claude/commands/veckan.md"
+mkdir -p "$HOME/Applications/Claude Workflows.app/Contents" "$HOME/.local/bin"
+echo '<string>com.me.claude-workflows-app</string>' > "$HOME/Applications/Claude Workflows.app/Contents/Info.plist"
+echo 'exec python3 "$HOME/.claude/scripts/workflows-dashboard.py" "$@"' > "$HOME/.local/bin/workflows"
 
 echo "dry run"
 before=$(snapshot)
@@ -105,10 +114,17 @@ check "keeps the user's own hook and settings" jq -e '.model == "opus" and
 check "registers the 3 session hooks" test "$(jq -r --arg h "$C/hooks/" \
   '[.hooks[][].hooks[].command | select(startswith($h))] | length' "$C/settings.json")" = 3
 check "removes the v1 leftovers" test ! -e "$C/scripts/standup-cron.sh" -a ! -e "$C/commands/veckan.md"
+check "and the old Claude Workflows.app and workflows launcher" \
+  test ! -e "$HOME/Applications/Claude Workflows.app" -a ! -e "$HOME/.local/bin/workflows"
+check "installs CCyclops.app and the ccyclops launcher" \
+  test -x "$HOME/Applications/CCyclops.app/Contents/MacOS/launcher" -a -x "$HOME/.local/bin/ccyclops"
+check "PR feeds go through pr-feed.sh" grep -qF "!\`$C/scripts/pr-feed.sh review-requested\`" "$C/commands/standup.md"
 check "round-trips odd characters through the installed config" bash -c \
   '. "$1"; [ "$SKIP_MEETING" = "Standup & Sync | \"Daily\"" ]' _ "$C/ccyclops/config.sh"
-check "dashboard renders the new schedules" bash -c \
-  'python3 "$1/.claude/scripts/workflows-dashboard.py" --dump | grep -q "Fri 16:00"' _ "$HOME"
+python3 "$C/scripts/workflows-dashboard.py" --dump > "$SANDBOX/dash.html"
+check "dashboard renders the new schedules" grep -q "Fri 16:00" "$SANDBOX/dash.html"
+check "dashboard is branded CCyclops" grep -q "<title>CCyclops</title>" "$SANDBOX/dash.html"
+check "its own card says dashboard" grep -q '<span class="name">dashboard</span>' "$SANDBOX/dash.html"
 
 echo "re-run with nothing changed"
 cp "$C/settings.json" "$SANDBOX/settings.before"
@@ -126,8 +142,9 @@ check "standup succeeds" job standup
 check "logs result and cost for the dashboard" grep -q '^meta: cost \$0.42 · 7 turns · 12s' "$C/logs/standup-cron.log"
 check "turn cap from the command's frontmatter" test "$(arg_after --max-turns)" = 50
 check "allowlist from the frontmatter" bash -c '[[ "$1" == Skill,Bash\(date:\*\),* ]]' _ "$(arg_after --allowedTools)"
-check "edits denied in ~/.claude and the repos" test "$(arg_after --disallowedTools)" = \
-  "Edit(/$C/**),Edit(/$HOME/Projects/**),Edit(/$HOME/Projects/widgets/**)"
+check "edits denied in ~/.claude and the repos" test "$(arg_after --disallowedTools)" = "Edit(/$C/**),Edit(/$HOME/Projects/**)"
+check "runs from the vault" bash -c 'printf "%s" "$1" | grep -qxF -- "cwd=$2"' _ "$(last_call)" "$HOME/My Vault"
+check "MODEL from config.sh" test "$(arg_after --model)" = haiku
 check "vault added as a working dir" bash -c 'printf "%s" "$1" | grep -qxF -- "$2"' _ "$(last_call)" "$HOME/My Vault"
 job pr-queue
 check "pr-queue may read the projects folder" bash -c 'printf "%s" "$1" | grep -qxF -- "$2"' _ "$(last_call)" "$HOME/Projects"
@@ -137,10 +154,20 @@ check "FEED FAILURE exits 2" test "$rc" = 2
 rc=0; FAKE_ERROR=true FAKE_RESULT="Claude usage limit reached" job standup || rc=$?
 check "usage limit exits 1" test "$rc" = 1
 check "and neither one retries" bash -c '! grep -q retrying "$1"' _ "$C/logs/standup-cron.log"
-mv "$HOME/Projects/widgets" "$HOME/Projects/gone"
+python3 -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("max-turns: 50\n", "max-turns: 50\nmodel: sonnet\n", 1))' "$C/commands/standup.md"
+job standup
+check "a command's model: line beats MODEL" test "$(arg_after --model)" = sonnet
+mv "$HOME/My Vault" "$HOME/gone"
 rc=0; job standup || rc=$?
-check "missing MAIN_REPO_DIR fails pre-flight (exit 3)" test "$rc" = 3
-mv "$HOME/Projects/gone" "$HOME/Projects/widgets"
+check "missing VAULT fails pre-flight (exit 3)" test "$rc" = 3
+mv "$HOME/gone" "$HOME/My Vault"
+
+echo "pr-feed.sh"
+bash "$C/scripts/pr-feed.sh" review-requested >/dev/null
+check "searches every term of GITHUB_SCOPE" grep -qF "q=is:pr is:open review-requested:@me org:acme repo:acme-labs/api" "$SANDBOX/gh.log"
+rc=0; out=$(FAKE_GH_FAIL=1 bash "$C/scripts/pr-feed.sh" mine) || rc=$?
+check "a failing search is loud: exit 1 and an error: line for the feed check" \
+  bash -c '[ "$1" = 1 ] && [[ "$2" == "error: GitHub search failed"*"Bad credentials"* ]]' _ "$rc" "$out"
 
 echo "hooks"
 W="$HOME/Projects/widgets" T="$HOME/My Vault/Workflows/Tickets"
@@ -171,19 +198,20 @@ check "weekly is manual again" test -f "$C/commands/weekly.md" -a ! -e "$A-weekl
 check "ticket-log hook is unregistered" bash -c '! grep -q ticket-log "$1" && [ ! -e "$2" ]' _ "$C/settings.json" "$C/hooks/ticket-log.sh"
 check "ticket-context hook stays" grep -q ticket-context "$C/settings.json"
 check "dashboard, app and launcher are gone" \
-  test ! -e "$A-workflows.plist" -a ! -e "$HOME/Applications/Claude Workflows.app" -a ! -e "$HOME/.local/bin/workflows"
+  test ! -e "$A-workflows.plist" -a ! -e "$HOME/Applications/CCyclops.app" -a ! -e "$HOME/.local/bin/ccyclops"
 check "unloaded what was turned off" test "$(sort "$SANDBOX/loaded" | tr '\n' ' ')" = \
   "$(for n in pr-queue standup; do printf 'com.%s.claude-%s ' "$(whoami)" "$n"; done)"
 
 echo "a broken config"
 cp "$CCYCLOPS_CONFIG" "$SANDBOX/config.good"
-printf '%s\n' 'JOB_STANDUP="weekdayz 9"' 'JOB_STANDUPP="daily 09:00"' 'CALENDAR=yes' >> "$CCYCLOPS_CONFIG"
+printf '%s\n' 'JOB_STANDUP="weekdayz 9"' 'JOB_STANDUPP="daily 09:00"' 'CALENDAR=yes' 'GITHUB_SCOPE="acme"' >> "$CCYCLOPS_CONFIG"
 before=$(snapshot)
 rc=0; install || rc=$?
 check "is refused" test "$rc" = 1
 check "names the bad schedule" output_has 'JOB_STANDUP: "weekdayz 9": unknown day'
 check "flags the typo" output_has "JOB_STANDUPP doesn't match a file in commands/"
 check "flags the bad boolean" output_has 'CALENDAR="yes": use true or false'
+check "flags a scope that isn't search terms" output_has 'GITHUB_SCOPE="acme": use org:NAME'
 check "and changes nothing" test "$before" = "$(snapshot)"
 cp "$SANDBOX/config.good" "$CCYCLOPS_CONFIG"
 

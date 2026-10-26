@@ -1,6 +1,6 @@
 ---
 description: Pre-review PRs awaiting my review — read-only, severity-filtered review notes into the vault before I open GitHub
-allowed-tools: Bash(date:*), Bash(ls:*), Bash(gh search:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh pr diff:*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(date:*), Bash(ls:*), Bash({{HOME}}/.claude/scripts/pr-feed.sh:*), Bash(gh pr view:*), Bash(gh pr diff:*), Read, Write, Edit, Glob, Grep
 max-turns: 60
 preflight: gh-auth
 add-dirs: projects
@@ -10,15 +10,15 @@ add-dirs: projects
 
 Today: !`date '+%Y-%m-%d (%A)'`
 
-PRs awaiting MY review across the org:
-!`gh search prs --review-requested=@me --state=open --owner={{GITHUB_ORG}} --json repository,number,title --jq '.[] | "\(.repository.nameWithOwner)#\(.number) \(.title)"' 2>&1`
+PRs awaiting MY review ({{GITHUB_SCOPE}}):
+!`{{HOME}}/.claude/scripts/pr-feed.sh review-requested`
 
 Existing pre-review notes:
 !`ls "{{VAULT}}/Workflows/Reviews/" 2>/dev/null`
 
 ## Task
 
-**Feed check — do this first.** If the `gh search` output above shows an authentication or API error rather than a (possibly empty) list, do NOT write anything. Reply with a single line starting `FEED FAILURE:` naming the error, then stop. An empty PR list is normal — reply "No PRs awaiting review." and stop.
+**Feed check — do this first.** If the PR list above shows an `error:` line rather than a (possibly empty) list, do NOT write anything. Reply with a single line starting `FEED FAILURE:` naming the error, then stop. An empty PR list is normal — reply "No PRs awaiting review." and stop.
 
 For each PR in the list, write a pre-review note at `{{VAULT}}/Workflows/Reviews/<repo>-PR<number>.md` (create the folder if needed):
 

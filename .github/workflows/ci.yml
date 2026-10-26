@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: shellcheck
-        run: shellcheck -x -S warning install.sh config.example.sh bin/workflows app/launcher scripts/*.sh hooks/*.sh tests/*.sh
+        run: shellcheck -x -S warning install.sh config.example.sh bin/ccyclops app/launcher scripts/*.sh hooks/*.sh tests/*.sh
       - name: python compiles
         run: python3 -m py_compile scripts/*.py tools/*.py
 

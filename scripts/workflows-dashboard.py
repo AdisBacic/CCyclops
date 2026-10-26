@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude Workflows — single-file, stdlib-only status dashboard.
+"""CCyclops dashboard — single-file, stdlib-only status page.
 
 Scans on every request (a browser refresh always shows live state):
   * ~/Library/LaunchAgents/*.plist        -> scheduled Claude workflows
@@ -11,10 +11,10 @@ Scans on every request (a browser refresh always shows live state):
   * ~/.claude/ccyclops/config.sh          -> port and config location (written by install.sh)
 
 Usage:
-  workflows                 serve on http://127.0.0.1:<DASHBOARD_PORT> (default 8787) and open the browser
-  workflows --port 9000     serve on another port
-  workflows --no-open       don't open the browser
-  workflows --dump          print the HTML once to stdout (no server)
+  ccyclops                  serve on http://127.0.0.1:<DASHBOARD_PORT> (default 8787) and open the browser
+  ccyclops --port 9000      serve on another port
+  ccyclops --no-open        don't open the browser
+  ccyclops --dump           print the HTML once to stdout (no server)
 """
 
 import argparse
@@ -63,6 +63,9 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 PORT = int(CONFIG.get("DASHBOARD_PORT") or 8787)
+
+# The dashboard's own agent is labelled claude-workflows; show it as what it is.
+DISPLAY_NAMES = {"workflows": "dashboard"}
 
 # Hand-written descriptions win over anything derived from files.
 DESCRIPTIONS = {
@@ -626,7 +629,7 @@ def render_workflow(f: Workflow) -> str:
     <div class="card">
       <div class="row">
         <span class="dot {dot}{live}"></span>
-        <span class="name">{e(f.name)}</span>
+        <span class="name">{e(DISPLAY_NAMES.get(f.name, f.name))}</span>
         <span class="chip">{e(f.schedule)}</span>
         <span class="right">last: {last_txt}</span>
       </div>
@@ -668,7 +671,7 @@ def build_html() -> str:
     now = datetime.now()
     return f"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Claude Workflows</title>
+<title>CCyclops</title>
 <link rel="icon" href="{favicon_href()}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -677,7 +680,7 @@ def build_html() -> str:
 <div id="quote" aria-hidden="true"></div>
 <div class="wrap">
   <header>
-    <h1>Workflows<span class="tld">.</span></h1>
+    <h1>CCyclops<span class="tld">.</span></h1>
     <div class="meta"><b id="clock">{now:%H:%M:%S}</b> · {now:%a %d %b}<br>
     scanned {now:%H:%M:%S} · auto-refresh 60s</div>
   </header>
@@ -743,7 +746,7 @@ def serve(port: int, open_browser: bool):
         if open_browser and sys.platform == "darwin":
             subprocess.run(["open", url], check=False)
         return
-    print(f"Claude Workflows dashboard → {url}  (Ctrl-C to stop)")
+    print(f"CCyclops dashboard → {url}  (Ctrl-C to stop)")
     if open_browser and sys.platform == "darwin":
         threading.Timer(0.3, lambda: subprocess.run(["open", url], check=False)).start()
     try:

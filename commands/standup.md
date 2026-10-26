@@ -1,6 +1,6 @@
 ---
 description: Write today's daily note in the vault — what I did yesterday, today's plan, blockers
-allowed-tools: Bash(date:*), Bash(find:*), Bash(ls:*), Bash(icalBuddy:*), Bash(gh pr list:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash({{HOME}}/.claude/scripts/standup-git.sh), Bash({{HOME}}/.claude/scripts/standup-calendar.sh:*), Read, Write, Edit, Glob, Grep
+allowed-tools: Bash(date:*), Bash(find:*), Bash(ls:*), Bash(icalBuddy:*), Bash(gh search:*), Bash(gh pr view:*), Bash(gh issue view:*), Bash({{HOME}}/.claude/scripts/pr-feed.sh:*), Bash({{HOME}}/.claude/scripts/standup-git.sh), Bash({{HOME}}/.claude/scripts/standup-calendar.sh:*), Read, Write, Edit, Glob, Grep
 max-turns: 50
 preflight: gh-auth calendar-cache
 ---
@@ -25,16 +25,16 @@ Meetings today (same filtering/fallback):
 !`{{HOME}}/.claude/scripts/standup-calendar.sh today`
 
 PRs awaiting MY review:
-!`gh pr list -R {{MAIN_REPO}} --search "review-requested:@me" --state open --json number,title --jq '.[] | "#\(.number) \(.title)"' 2>/dev/null`
+!`{{HOME}}/.claude/scripts/pr-feed.sh review-requested`
 
 ## Task
 
-**Feed check — do this first.** Inspect the injected context above. If any source shows an *error* rather than data — the git script printing errors, `gh` output showing authentication/API failures, the calendar script printing a line that starts with "(calendar unavailable" — do NOT write or modify the daily note. Reply with a single line starting `FEED FAILURE:` naming the broken source and the error text, then stop. A better note tomorrow beats a silently thinner note today. An empty-but-successful feed (no commits, no meetings, no PRs) is normal and NOT a failure — and so is "(calendar disabled in config.sh)", which just means there are no meetings to report.
+**Feed check — do this first.** Inspect the injected context above. If any source shows an *error* rather than data — the git script printing errors, a PR list showing an `error:` line, the calendar script printing a line that starts with "(calendar unavailable" — do NOT write or modify the daily note. Reply with a single line starting `FEED FAILURE:` naming the broken source and the error text, then stop. A better note tomorrow beats a silently thinner note today. An empty-but-successful feed (no commits, no meetings, no PRs) is normal and NOT a failure — and so is "(calendar disabled in config.sh)", which just means there are no meetings to report.
 
 Write today's daily note at `{{VAULT}}/Workflows/Daily/<today>.md`. If it already exists, update it in place (preserve anything hand-written).
 
 1. **Read the sources**: each recently-touched ticket note listed above (their `## Work log` sections describe what happened), and the most recent previous daily note (to carry over open items).
-2. **Check ticket state**: for each ticket that had activity, run `gh pr list --repo <repo> --head <branch> --state all --json number,state,title` (or `gh issue view <number>`) in `{{MAIN_REPO_DIR}}` to find whether its PR is open, merged, or closed. Update that ticket note's `status:` frontmatter field if it changed (active → review → merged), and refresh `updated:`.
+2. **Check ticket state**: for each ticket that had activity, run `gh search prs {{GITHUB_SCOPE}} head:<branch> --json repository,number,title` to find its PR, then `gh pr view <number> -R <owner/repo> --json state` to tell open, merged and closed apart (or `gh issue view <number> -R <owner/repo>`). Update that ticket note's `status:` frontmatter field if it changed (active → review → merged), and refresh `updated:`.
 3. **Write the daily note** in this exact shape (the ```text fence around the standup is essential — Obsidian renders a one-click copy button on code blocks):
 
 ````markdown

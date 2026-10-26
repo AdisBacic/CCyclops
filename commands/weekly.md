@@ -1,6 +1,6 @@
 ---
 description: Weekly rollup — fold this week's daily notes into one summary (monthly-review / 1:1 material)
-allowed-tools: Bash(date:*), Bash(ls:*), Bash(find:*), Bash(gh pr list:*), Bash({{HOME}}/.claude/scripts/weekly-prs.sh), Read, Write, Glob, Grep
+allowed-tools: Bash(date:*), Bash(ls:*), Bash(find:*), Bash({{HOME}}/.claude/scripts/pr-feed.sh:*), Read, Write, Glob, Grep
 max-turns: 40
 preflight: gh-auth
 ---
@@ -13,7 +13,7 @@ This week's daily notes:
 !`find "{{VAULT}}/Workflows/Daily" -name '*.md' -mtime -7 2>/dev/null | sort`
 
 My merged PRs this week:
-!`{{HOME}}/.claude/scripts/weekly-prs.sh`
+!`{{HOME}}/.claude/scripts/pr-feed.sh merged-week`
 
 ## Task
 
