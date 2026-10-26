@@ -7,8 +7,10 @@
 # Output: Workflows/Tickets/<ticket>*.md gets a "## Work log" entry appended.
 
 set -u
-VAULT="__VAULT__"
-TICKETS_DIR="$VAULT/Workflows/Tickets"
+# shellcheck source=/dev/null
+. "$HOME/.claude/ccyclops/config.sh" 2>/dev/null || exit 0
+# shellcheck source=scripts/ticket-lib.sh
+. "$HOME/.claude/scripts/ticket-lib.sh" 2>/dev/null || exit 0
 
 INPUT=$(cat)
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -19,38 +21,27 @@ cd "$CWD" || exit 0
 
 # Only log work in git repos, on a real feature branch.
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
-BRANCH=$(git branch --show-current 2>/dev/null)
-case "$BRANCH" in
-  ""|master|main|dev|production) exit 0 ;;
-esac
+BRANCH=$(ticket_branch) || exit 0
 
 REPO=$(basename "$(git rev-parse --show-toplevel)")
-
-# Ticket number = last standalone 4-5 digit group in the branch name.
-TICKET=$(echo "$BRANCH" | grep -oE '[0-9]{4,5}' | tail -1)
-
-# Note file: prefer an existing note whose name starts with the ticket number
-# (so "1234.md" renamed to "1234 Some title.md" keeps working).
+TICKET=$(ticket_id "$BRANCH")
 mkdir -p "$TICKETS_DIR"
-if [ -n "$TICKET" ]; then
-  NOTE=$(find "$TICKETS_DIR" -maxdepth 1 -name "$TICKET*.md" | head -1)
-  [ -n "$NOTE" ] || NOTE="$TICKETS_DIR/$TICKET.md"
-else
-  # No number in the branch — fall back to a note named after the branch.
-  SLUG=$(echo "$BRANCH" | tr '/' '-')
-  NOTE=$(find "$TICKETS_DIR" -maxdepth 1 -name "$SLUG*.md" | head -1)
-  [ -n "$NOTE" ] || NOTE="$TICKETS_DIR/$SLUG.md"
-fi
+NOTE=$(ticket_note "$BRANCH")
 
 NOW=$(date '+%Y-%m-%d %H:%M')
 TODAY=$(date '+%Y-%m-%d')
 
 # Cheap facts about the session's work. Commits: today's, on this branch only
-# (fall back to plain HEAD history if there is no master).
-RANGE="master..HEAD"
-git rev-parse --verify -q master >/dev/null 2>&1 || RANGE="HEAD"
-COMMITS=$(git log $RANGE --oneline --since=midnight --author="$(git config user.email)" 2>/dev/null | head -5)
-CHANGED=$( { git diff --name-only master...HEAD 2>/dev/null; git status --porcelain 2>/dev/null | awk '{print $2}'; } | sort -u | head -12)
+# (compared to the default branch; plain HEAD history if there is none).
+BASE=$(default_branch)
+BASE_REF=""
+for ref in "origin/$BASE" "$BASE"; do
+  if [ -n "$BASE" ] && git rev-parse --verify -q "$ref" >/dev/null; then BASE_REF=$ref; break; fi
+done
+RANGE="${BASE_REF:+$BASE_REF..}HEAD"
+COMMITS=$(git log "$RANGE" --oneline --since=midnight --author="$(git config user.email)" 2>/dev/null | head -5)
+CHANGED=$( { [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF...HEAD" 2>/dev/null
+             git status --porcelain 2>/dev/null | cut -c4- | sed 's/.* -> //'; } | sort -u | head -12)
 
 # First user prompt from the transcript = what the session was about.
 TOPIC=""

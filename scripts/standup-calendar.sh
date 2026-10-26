@@ -2,17 +2,38 @@
 # Calendar fetch for /standup and /wrapdown, with cache fallback.
 # icalBuddy works interactively (terminal has the Calendar TCC grant) and
 # directly under launchd — but NOT when spawned inside a headless claude
-# session (the responsible process lacks the grant). The cron wrappers
-# therefore run `--write-cache` BEFORE launching claude; this script then
-# serves live data when it can, cached data when it can't.
+# session (the responsible process lacks the grant). run-job.sh therefore
+# runs `--write-cache` BEFORE launching claude; this script then serves live
+# data when it can, cached data when it can't.
 #
 # Usage: standup-calendar.sh yesterday|today|--write-cache
+# shellcheck source=/dev/null
+. "$HOME/.claude/ccyclops/config.sh" || exit 1
+
+case "${1:-}" in
+  yesterday|today|--write-cache) ;;
+  *) echo "usage: $0 yesterday|today|--write-cache" >&2; exit 1 ;;
+esac
+
+# Turned off in config.sh: an empty, healthy feed (the prompts know this line).
+if [ "${CALENDAR:-true}" != true ]; then
+  [ "$1" = --write-cache ] || echo "(calendar disabled in config.sh)"
+  exit 0
+fi
+if ! command -v icalBuddy >/dev/null; then
+  [ "$1" = --write-cache ] || echo "(calendar unavailable — icalBuddy is not installed: brew install ical-buddy, or set CALENDAR=false in config.sh)"
+  exit 0
+fi
 
 CACHE_DIR="$HOME/.claude/cache"
 CACHE="$CACHE_DIR/standup-calendar-$(date +%Y-%m-%d).txt"
-ICB=(icalBuddy -ic "__CALENDARS__"
+ICB=(icalBuddy -ic "$CALENDARS"
      -npn -nc -iep "title,datetime,attendees" -po "datetime,title,attendees"
      -ps "/ — / · med: /" -b "" -eed)
+
+skip_meeting() {  # drop the recurring meeting — it happens every day
+  if [ -n "${SKIP_MEETING:-}" ]; then grep -vF -- "$SKIP_MEETING"; else cat; fi
+}
 
 fetch() {
   if [ "$1" = "yesterday" ]; then
@@ -25,10 +46,10 @@ fetch() {
     fi
   else
     "${ICB[@]}" eventsToday 2>/dev/null
-  fi | grep -v "__SKIP_MEETING__" | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2}|yesterday|today) at //' | sort -u
+  fi | skip_meeting | sed -E 's/^([0-9]{4}-[0-9]{2}-[0-9]{2}|yesterday|today) at //' | sort -u
 }
 
-case "${1:-}" in
+case "$1" in
   --write-cache)
     mkdir -p "$CACHE_DIR"
     find "$CACHE_DIR" -name 'standup-calendar-*.txt' -mtime +3 -delete 2>/dev/null
@@ -43,8 +64,5 @@ case "${1:-}" in
     else
       echo "(calendar unavailable — no live access and no cache)"
     fi
-    ;;
-  *)
-    echo "usage: $0 yesterday|today|--write-cache" >&2; exit 1
     ;;
 esac

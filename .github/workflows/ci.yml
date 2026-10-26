@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -x -S warning install.sh config.example.sh bin/workflows app/launcher scripts/*.sh hooks/*.sh tests/*.sh
+      - name: python compiles
+        run: python3 -m py_compile scripts/*.py tools/*.py
+
+  smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install, run jobs and hooks, uninstall — in a throwaway $HOME
+        run: bash tests/smoke.sh
