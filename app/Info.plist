@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Claude Workflows</string>
+    <string>CCyclops</string>
     <key>CFBundleDisplayName</key>
-    <string>Claude Workflows</string>
+    <string>CCyclops</string>
     <key>CFBundleIdentifier</key>
-    <string>{{LAUNCHD_PREFIX}}.claude-workflows-app</string>
+    <string>{{LAUNCHD_PREFIX}}.ccyclops-app</string>
     <key>CFBundleVersion</key>
     <string>1.0</string>
     <key>CFBundlePackageType</key>

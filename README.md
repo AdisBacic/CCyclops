@@ -1,17 +1,18 @@
 <div align="center">
 
-<img src="assets/icon.png" width="128" alt="Claude Workflows icon">
+<img src="assets/icon.png" width="128" alt="CCyclops icon">
 
-# Claude Workflows
+# CCyclops
 
 **A local AI chief-of-staff for your dev day — scheduled Claude Code agents that write your standup, pre-review your PRs, and wrap up your evening, all tracked on a matrix-rain dashboard.**
 
+[![CI](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml/badge.svg)](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-launchd-black?logo=apple)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-headless-d97757)
 ![Python](https://img.shields.io/badge/Python-3.10%2B%20stdlib%20only-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-<img src="assets/dashboard.jpg" width="850" alt="The Claude Workflows dashboard">
+<img src="assets/dashboard.jpg" width="850" alt="The CCyclops dashboard">
 
 </div>
 
@@ -26,7 +27,7 @@ Three scheduled agents, one always-on dashboard, and session hooks that make eac
 | 08:40 | **pr-queue** | Pre-reviews every PR awaiting your review. Reads the diff, cross-checks callers in your local repos, writes a severity-filtered note per PR (Critical/High/Medium only — zero nitpicks). Its allowlist has no GitHub write commands and no git, and it can only write inside your vault. |
 | 09:00 | **standup** | Writes today's daily note: what you did yesterday (from commits, ticket logs, calendar), today's plan, blockers — plus a copy-paste-ready standup block for your team, wikilinked to the fresh pre-review notes. |
 | 17:30 | **wrapdown** | Appends an evening Wrap-up: what actually got done, what *didn't* happen vs. the morning plan, and tomorrow's starting point. Updates ticket statuses as PRs move. |
-| always | **workflows** | A live dashboard at `localhost:8787` — every automation, schedule, run history, per-run cost, failures — wrapped in a matrix-rain background that decodes your favorite quotes. Ships as a Dock/Spotlight app. |
+| always | **dashboard** | A live dashboard at `localhost:8787` — every automation, schedule, run history, per-run cost, failures — wrapped in a matrix-rain background that decodes your favorite quotes. Ships as a Dock/Spotlight app. |
 
 Plus two manual slash commands — **/weekly** (fold the week's daily notes into one summary) and **/catchup** (re-orient on the current feature branch) — and **session hooks**: every Claude Code session on a ticket branch starts knowing the ticket's history (SessionStart injects the ticket note) and ends by appending a work-log entry (SessionEnd) — which is exactly what tomorrow's standup reads. The loop closes itself.
 
@@ -43,6 +44,27 @@ flowchart LR
     H[session hooks] -->|work logs| V
     V --> feeds
     jobs -->|structured logs| D[dashboard :8787]
+```
+
+## What it writes
+
+A made-up week of output is in [`examples/`](examples): a [daily note](examples/Workflows/Daily/2026-10-20.md) with the morning standup and the evening wrap-up, a [PR pre-review](examples/Workflows/Reviews/shop-PR482.md) that catches a rounding bug, the [ticket note](examples/Workflows/Tickets/1234%20Discount%20codes%20at%20checkout.md) the session hooks keep, and the [weekly rollup](examples/Workflows/Weekly/2026-W43.md). The part you paste into the team chat each morning:
+
+```text
+Yesterday:
+
+Discount codes at checkout - validation and tests done, up for review
+Found the cause of issue #1251 - order emails sent twice
+PR check - shipping rates refactor
+Sync with Priya on the Q4 release plan
+
+Today:
+
+Discount codes at checkout - review feedback
+Fix for issue #1251
+PR check - prices in cents
+Payments webhook pairing with Sam
+Guest checkout design review with Priya and Lea
 ```
 
 ## Requirements
@@ -74,7 +96,7 @@ The installer copies everything into `~/.claude/`, registers the session hooks i
 Then:
 
 ```bash
-workflows                                    # opens the dashboard app window
+ccyclops                                     # opens the dashboard app window
 bash ~/.claude/scripts/run-job.sh standup    # test-drive a job right now
 ```
 
@@ -97,12 +119,14 @@ HOOK_TICKET_LOG=true
 
 | Want to… | In `config.sh` |
 |---|---|
+| look for PRs in several repos or orgs | `GITHUB_SCOPE="repo:acme/shop repo:acme/api"` — or `"org:acme"`, `"org:acme user:you"` |
 | move a job | `JOB_STANDUP="weekdays 08:45"` — also `daily 07:30`, `mon,wed,fri 16:00`, `weekdays 09:00 13:00`, `every 2h` |
 | run a job only by hand | `JOB_WRAPDOWN="manual"` |
 | drop a command entirely | `JOB_CATCHUP="off"` |
 | no dashboard / no calendar | `DASHBOARD=false` · `CALENDAR=false` |
 | stop a session hook | `HOOK_TICKET_LOG=false` |
 | notes in another language | `LANGUAGE="Svenska"` |
+| run jobs on a cheaper model | `MODEL="sonnet"` (a command's own `model:` line wins) |
 | Jira-style ticket keys | `TICKET_PATTERN="[A-Z]+-[0-9]+"` |
 | other dev-server ports to warn about | `DEV_SERVER_PORTS="3000 5173"` |
 
@@ -115,18 +139,19 @@ A job is one Markdown file plus one config line. Drop a command into `commands/`
 ```markdown
 ---
 description: Draft release notes from this week's merged PRs
-allowed-tools: Bash(gh pr list:*), Read, Write, Glob
+allowed-tools: Bash({{HOME}}/.claude/scripts/pr-feed.sh:*), Bash(gh pr view:*), Read, Write, Glob
 max-turns: 30
 preflight: gh-auth
+model: sonnet
 ---
 
-Recently merged:
-!`gh pr list -R {{MAIN_REPO}} --state merged --limit 30 --json number,title,mergedAt`
+Merged this week:
+!`{{HOME}}/.claude/scripts/pr-feed.sh merged-week`
 
-Write release notes for the PRs merged in the last 7 days to `{{VAULT}}/Workflows/Releases/<today>.md` …
+Write release notes for these PRs to `{{VAULT}}/Workflows/Releases/<today>.md` …
 ```
 
-(Injected `` !`…` `` lines can't use `$`-expansions — put anything fancier in a script, like `scripts/weekly-prs.sh`.)
+(Injected `` !`…` `` lines can't use `$`-expansions — put anything fancier in a script, like `scripts/pr-feed.sh`.)
 
 …add `JOB_RELEASE_NOTES="fri 15:00"` to `config.sh`, and run `./install.sh`. It becomes `/release-notes`, a launchd agent, and a card on the dashboard (described by its own frontmatter).
 
@@ -136,6 +161,7 @@ Write release notes for the PRs merged in the last 7 days to `{{VAULT}}/Workflow
 | `max-turns` | turn cap (default `MAX_TURNS`) |
 | `preflight` | checks before Claude starts: `gh-auth`, `calendar-cache` |
 | `add-dirs` | extra folders Claude may read: `projects` |
+| `model` | model for this job, also used when you run it by hand (default `MODEL`) |
 
 Any `{{KEY}}` in a command is filled from `config.sh` — including keys you add yourself (`TEAM="Platform"` → `{{TEAM}}`). A new session hook works the same way: drop `hooks/<name>.sh` whose second line reads `# SessionEnd hook: …` (or `SessionStart`, …) and switch it with `HOOK_<NAME>`.
 
@@ -188,7 +214,7 @@ Removes the launchd agents, app, commands, hooks (unregistered from `settings.js
 <details>
 <summary><b>A job failed — where do I look?</b></summary>
 
-The dashboard shows a red banner for failures in the last 7 days (dismissable with ×), and you get a macOS notification. Details: `tail -50 ~/.claude/logs/<job>-cron.log`, or re-run it and watch: `bash ~/.claude/scripts/run-job.sh <job>`. Exit codes: `1` claude error · `2` feed failure · `3` pre-flight failed (usually `gh auth login` needed, or `MAIN_REPO_DIR` doesn't exist) · `124` watchdog kill.
+The dashboard shows a red banner for failures in the last 7 days (dismissable with ×), and you get a macOS notification. Details: `tail -50 ~/.claude/logs/<job>-cron.log`, or re-run it and watch: `bash ~/.claude/scripts/run-job.sh <job>`. Exit codes: `1` claude error · `2` feed failure · `3` pre-flight failed (usually `gh auth login` needed) · `124` watchdog kill.
 </details>
 
 <details>
@@ -211,7 +237,7 @@ On a Claude subscription, the rolling usage window can starve scheduled jobs. Th
 
 ## Development
 
-`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`, runs jobs and hooks, flips settings, and uninstalls — 60-odd checks, nothing touches your real setup. CI runs it on macOS, plus shellcheck.
+`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`, runs jobs and hooks, flips settings, and uninstalls — 70-odd checks, nothing touches your real setup. CI runs it on macOS, plus shellcheck.
 
 ## License
 

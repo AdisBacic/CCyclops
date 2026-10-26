@@ -1,5 +1,5 @@
 # shellcheck shell=bash disable=SC2034
-# Claude Workflows — the one file you edit.
+# CCyclops — the one file you edit.
 #
 # ./install.sh copies this to config.sh on first run (config.sh is gitignored).
 # Change any value there, then run ./install.sh again to apply it. Re-running
@@ -7,10 +7,9 @@
 
 # ── Where things live ────────────────────────────────────────────────────────
 VAULT="$HOME/Notes"                       # notes are written to $VAULT/Workflows/
-PROJECTS_DIR="$HOME/Projects"             # folder that contains your git repos
-MAIN_REPO="your-org/your-repo"            # owner/name: PR feeds for standup/wrapdown/weekly
-MAIN_REPO_DIR="$PROJECTS_DIR/your-repo"   # local clone of MAIN_REPO (jobs run from here)
-GITHUB_ORG="your-org"                     # org scanned for PRs awaiting your review
+PROJECTS_DIR="$HOME/Projects"             # folder with your git clones (commit feeds, PR cross-checks)
+GITHUB_SCOPE="org:your-org"               # where your PRs live, as GitHub search terms (any mix, OR'd):
+                                          #   "org:acme"   "repo:acme/shop repo:acme/api"   "org:acme user:you"
 
 # ── Jobs ─────────────────────────────────────────────────────────────────────
 # One line per file in commands/ (JOB_<FILE NAME>). The value is a schedule,
@@ -25,7 +24,7 @@ JOB_WEEKLY="manual"                       # fold the week's dailies into one not
 JOB_CATCHUP="manual"                      # re-orient on the current feature branch
 
 # ── Features (true / false) ──────────────────────────────────────────────────
-DASHBOARD=true                 # always-on dashboard + "Claude Workflows" Dock/Spotlight app
+DASHBOARD=true                 # always-on dashboard + CCyclops Dock/Spotlight app
 CALENDAR=true                  # meeting feeds from icalBuddy (brew install ical-buddy)
 NOTIFICATIONS=true             # macOS notification when a scheduled job fails
 # Session hooks — one line per file in hooks/ (HOOK_<FILE NAME>).
@@ -49,6 +48,8 @@ DEV_SERVER_PORTS="3000"        # warn if something still listens here, e.g. "300
 
 # ── Runner & dashboard ───────────────────────────────────────────────────────
 MAX_TURNS=40                   # turn cap per job (a command can set its own max-turns:)
+MODEL=""                       # model for scheduled jobs, e.g. "sonnet" ("" = your Claude Code default;
+                               # a command's own model: line wins)
 WATCHDOG_MINUTES=15            # kill a job that runs longer than this
 DASHBOARD_PORT=8787
 LAUNCHD_PREFIX="com.$(whoami)" # launchd labels become <prefix>.claude-<job>

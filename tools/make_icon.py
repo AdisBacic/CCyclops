@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Claude Workflows app icon (.iconset PNGs) — stdlib only.
+"""Generate the CCyclops app icon (.iconset PNGs) — stdlib only.
 Dark rounded square matching the dashboard palette, with a glowing phosphor dot."""
 import math
 import struct

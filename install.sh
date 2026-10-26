@@ -1,5 +1,5 @@
 #!/bin/bash
-# Claude Workflows installer — applies config.sh to this Mac.
+# CCyclops installer — applies config.sh to this Mac.
 #
 #   ./install.sh                install or update from config.sh (the first run
 #                               asks a few questions and writes config.sh)
@@ -20,12 +20,12 @@ HELPER="$REPO_DIR/tools/ccyclops.py"
 CLAUDE_DIR="$HOME/.claude"
 INSTALLED_CONFIG="$CLAUDE_DIR/ccyclops/config.sh"
 AGENTS="$HOME/Library/LaunchAgents"
-APP="$HOME/Applications/Claude Workflows.app"
-LAUNCHER="$HOME/.local/bin/workflows"
+APP="$HOME/Applications/CCyclops.app"
+LAUNCHER="$HOME/.local/bin/ccyclops"
 GUI="gui/$(id -u)"
-# Files the pre-config.sh layout installed, removed on upgrade.
+# Files earlier layouts installed in ~/.claude, removed on upgrade.
 LEGACY="scripts/job-lib.sh scripts/standup-cron.sh scripts/wrapdown-cron.sh scripts/pr-queue-cron.sh
-        scripts/veckan-prs.sh scripts/make_icon.py scripts/mask_icon.py commands/veckan.md"
+        scripts/veckan-prs.sh scripts/weekly-prs.sh scripts/make_icon.py scripts/mask_icon.py commands/veckan.md"
 
 DRY=0 MODE=install YES=0
 for arg in "$@"; do
@@ -87,6 +87,19 @@ unload_agent() {
   remove "$(agent_plist "$1")"
 }
 
+legacy_paths() {  # what earlier layouts left behind, one path per line
+  local rel
+  for rel in $LEGACY; do
+    if [ -e "$CLAUDE_DIR/$rel" ]; then printf '%s\n' "$CLAUDE_DIR/$rel"; fi
+  done
+  # The app and launcher were "Claude Workflows.app" and "workflows" — remove them only if they're ours.
+  if grep -qs claude-workflows-app "$HOME/Applications/Claude Workflows.app/Contents/Info.plist"; then
+    printf '%s\n' "$HOME/Applications/Claude Workflows.app"
+  fi
+  if grep -qs workflows-dashboard.py "$HOME/.local/bin/workflows"; then printf '%s\n' "$HOME/.local/bin/workflows"; fi
+  return 0
+}
+
 # ----------------------------------------------------------------- session hooks
 hook_event() { sed -n '2s/^# \([A-Za-z]*\) hook:.*/\1/p' "$1"; }  # "# SessionEnd hook: ..."
 
@@ -137,15 +150,12 @@ ask() {  # ask VAR "Question" — Enter keeps the current value
 
 # shellcheck disable=SC2034  # the answers are read by tools/ccyclops.py from the environment
 configure() {  # the setup questions; answers go into config.sh
-  local base="$EXAMPLE" first=1
-  if [ -f "$CONFIG" ]; then base="$CONFIG"; first=0; fi
+  local base="$EXAMPLE"
+  [ ! -f "$CONFIG" ] || base="$CONFIG"
   say "Setup — Enter keeps the value in [brackets]. Everything else is in $(pretty "$CONFIG")."
   ask VAULT "Notes folder (Obsidian vault or any folder; created if missing)"
-  ask PROJECTS_DIR "Folder that contains your git repos"
-  ask MAIN_REPO "Your main GitHub repo, as owner/name"
-  if [ "$first" = 1 ]; then MAIN_REPO_DIR="$PROJECTS_DIR/${MAIN_REPO#*/}"; GITHUB_ORG="${MAIN_REPO%%/*}"; fi
-  ask MAIN_REPO_DIR "Local clone of that repo"
-  ask GITHUB_ORG "GitHub org to scan for PRs awaiting your review"
+  ask PROJECTS_DIR "Folder that contains your git clones"
+  ask GITHUB_SCOPE "Where your PRs live (org:acme, or repo:acme/shop repo:acme/api)"
   if command -v icalBuddy >/dev/null; then
     ask CALENDARS "icalBuddy calendar names, comma-separated (an email calendar works)"
     ask SKIP_MEETING "Recurring meeting to leave out of notes"
@@ -155,12 +165,11 @@ configure() {  # the setup questions; answers go into config.sh
   fi
   ask LANGUAGE "Language the notes are written in"
   if [ "$DRY" = 1 ]; then echo "  [dry] write $(pretty "$CONFIG")"; return 0; fi
-  helper write-config "$base" "$CONFIG" VAULT PROJECTS_DIR MAIN_REPO MAIN_REPO_DIR GITHUB_ORG \
-    CALENDAR CALENDARS SKIP_MEETING LANGUAGE
+  helper write-config "$base" "$CONFIG" VAULT PROJECTS_DIR GITHUB_SCOPE CALENDAR CALENDARS SKIP_MEETING LANGUAGE
   echo "  wrote $(pretty "$CONFIG")"
 }
 
-[ "$(uname -s)" = Darwin ] || { echo "Claude Workflows needs macOS (it schedules jobs with launchd)." >&2; exit 1; }
+[ "$(uname -s)" = Darwin ] || { echo "CCyclops needs macOS (it schedules jobs with launchd)." >&2; exit 1; }
 command -v jq >/dev/null || { echo "MISSING: jq (brew install jq)" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "MISSING: python3 (brew install python3)" >&2; exit 1; }
 export CCYCLOPS_EXAMPLE="$EXAMPLE" CCYCLOPS_CONFIG="$CONFIG"
@@ -170,7 +179,7 @@ if [ "$MODE" = uninstall ]; then
   # What is installed wins over config.sh, which may have changed since.
   if [ -f "$INSTALLED_CONFIG" ]; then load_config "$INSTALLED_CONFIG"; else load_config; fi
   if [ "$DRY" = 0 ] && [ "$YES" = 0 ] && [ "$HAVE_TTY" = 1 ]; then
-    printf 'Remove Claude Workflows from this Mac? Notes, logs and quotes stay. [y/N]: ' >&2
+    printf 'Remove CCyclops from this Mac? Notes, logs and quotes stay. [y/N]: ' >&2
     read -r yn </dev/tty || yn=""
     case "$yn" in y|Y|yes) ;; *) echo "Nothing removed."; exit 0 ;; esac
   fi
@@ -186,7 +195,7 @@ if [ "$MODE" = uninstall ]; then
   for f in "$REPO_DIR"/hooks/*.sh; do remove "$CLAUDE_DIR/hooks/$(basename "$f")"; done
   say "Removing scripts"
   for f in "$REPO_DIR"/scripts/*.sh "$REPO_DIR"/scripts/*.py; do remove "$CLAUDE_DIR/scripts/$(basename "$f")"; done
-  for rel in $LEGACY; do remove "$CLAUDE_DIR/$rel"; done
+  while IFS= read -r p; do remove "$p"; done <<<"$(legacy_paths)"
   remove "$CLAUDE_DIR/ccyclops"
   say "Done"
   echo "Left in place: your notes in $(pretty "$VAULT")/Workflows/, ~/.claude/scripts/workflows-quotes.json,"
@@ -284,8 +293,8 @@ for f in "$REPO_DIR"/commands/*.md; do
 done
 
 if [ "$DASHBOARD" = true ]; then
-  say "Dashboard -> ~/Applications/Claude Workflows.app, ~/.local/bin/workflows"
-  copy "$REPO_DIR/bin/workflows" "$LAUNCHER" 755
+  say "Dashboard -> ~/Applications/CCyclops.app, ~/.local/bin/ccyclops"
+  copy "$REPO_DIR/bin/ccyclops" "$LAUNCHER" 755
   render "$REPO_DIR/app/Info.plist" "$APP/Contents/Info.plist"
   copy "$REPO_DIR/app/launcher" "$APP/Contents/MacOS/launcher" 755
   copy "$REPO_DIR/app/icon.icns" "$APP/Contents/Resources/app.icns"
@@ -296,20 +305,18 @@ if [ "$DASHBOARD" = true ]; then
   else
     load_agent workflows
   fi
-  summary="$summary$(printf '  %-12s http://127.0.0.1:%s  (open it: workflows)' dashboard "$DASHBOARD_PORT")"$'\n'
+  summary="$summary$(printf '  %-12s http://127.0.0.1:%s  (open it: ccyclops)' dashboard "$DASHBOARD_PORT")"$'\n'
 else
   say "Dashboard off — removing it"
   unload_agent workflows
   remove "$APP" "$LAUNCHER"
 fi
 
-legacy=0
-for rel in $LEGACY; do
-  [ -e "$CLAUDE_DIR/$rel" ] || continue
-  [ "$legacy" = 1 ] || say "Removing files from the previous layout"
-  legacy=1
-  remove "$CLAUDE_DIR/$rel"
-done
+legacy=$(legacy_paths)
+if [ -n "$legacy" ]; then
+  say "Removing files from the previous layout"
+  while IFS= read -r p; do remove "$p"; done <<<"$legacy"
+fi
 
 say "Done$([ "$DRY" = 1 ] && echo ' (dry run — nothing was changed)')"
 printf '%s' "$summary"

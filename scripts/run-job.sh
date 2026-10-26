@@ -12,8 +12,9 @@
 #   preflight      checks before claude starts: gh-auth, calendar-cache
 #   add-dirs       extra folders claude may read: projects (the vault and
 #                  ~/.claude are always added)
-# Whatever the allowlist says, writes only land in the vault: Edit/Write are
-# denied in ~/.claude, PROJECTS_DIR and MAIN_REPO_DIR.
+#   model          model for this job (default: MODEL in config.sh)
+# Jobs run from the vault, and whatever the allowlist says, writes only land
+# there: Edit/Write are denied in ~/.claude and PROJECTS_DIR.
 #
 # Log format (parsed by workflows-dashboard.py — keep the markers stable):
 #   === YYYY-MM-DD HH:MM <job> cron start ===
@@ -45,7 +46,7 @@ fm() {  # fm <key> — a single-line value from the command's frontmatter
 
 notify() {
   [ "${NOTIFICATIONS:-true}" = true ] || return 0
-  osascript -e "display notification \"$1\" with title \"Claude ${JOB}\"" >/dev/null 2>&1
+  osascript -e "display notification \"$1\" with title \"CCyclops · ${JOB}\"" >/dev/null 2>&1
 }
 
 preflight() {
@@ -54,7 +55,7 @@ preflight() {
   if [ ! -x "${CLAUDE_BIN:-}" ]; then
     echo "PREFLIGHT: claude not found at '${CLAUDE_BIN:-}' — set CLAUDE_BIN in config.sh and run ./install.sh"; return 1
   fi
-  cd "$MAIN_REPO_DIR" 2>/dev/null || { echo "PREFLIGHT: MAIN_REPO_DIR not found: $MAIN_REPO_DIR"; return 1; }
+  cd "$VAULT" 2>/dev/null || { echo "PREFLIGHT: VAULT not found: $VAULT (config.sh)"; return 1; }
   local check
   for check in $(fm preflight); do
     case "$check" in
@@ -68,12 +69,14 @@ preflight() {
 }
 
 build_args() {
-  local turns tools deny d
+  local turns tools model deny d
   turns=$(fm max-turns | grep -E '^[0-9]+$' || echo "${MAX_TURNS:-40}")
   tools=$(fm allowed-tools | sed 's/, */,/g')
+  model=$(fm model); model="${model:-${MODEL:-}}"
   ARGS=(--output-format json --max-turns "$turns" --permission-mode acceptEdits
         --add-dir "$VAULT" --add-dir "$HOME/.claude"
         --allowedTools "Skill,${tools:-Read,Write,Edit,Glob,Grep}")
+  [ -z "$model" ] || ARGS+=(--model "$model")
   for d in $(fm add-dirs); do
     case "$d" in
       projects) ARGS+=(--add-dir "$PROJECTS_DIR") ;;
@@ -81,10 +84,10 @@ build_args() {
       *) ARGS+=(--add-dir "$d") ;;
     esac
   done
-  # acceptEdits would auto-accept writes in every added dir and the working
-  # directory; deny them outside the vault (unless the vault lives inside one).
+  # acceptEdits would auto-accept writes in every added dir; deny them
+  # outside the vault (unless the vault lives inside one of these).
   deny=""
-  for d in "$HOME/.claude" "$PROJECTS_DIR" "$MAIN_REPO_DIR"; do
+  for d in "$HOME/.claude" "$PROJECTS_DIR"; do
     case "$VAULT/" in "$d"/*) ;; *) deny="$deny${deny:+,}Edit(/$d/**)" ;; esac
   done
   [ -z "$deny" ] || ARGS+=(--disallowedTools "$deny")
@@ -130,7 +133,7 @@ run_once() {
 }
 
 mkdir -p "$(dirname "$LOG")"
-FIRST_LINE=$(( $(wc -l <"$LOG" 2>/dev/null || echo 0) + 1 ))
+FIRST_LINE=$(( $( { wc -l <"$LOG"; } 2>/dev/null || echo 0) + 1 ))  # no log yet on the first run
 {
   echo "=== $(date '+%Y-%m-%d %H:%M') ${JOB} cron start ==="
   if ! preflight; then
