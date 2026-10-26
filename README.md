@@ -6,6 +6,7 @@
 
 **A local AI chief-of-staff for your dev day — scheduled Claude Code agents that write your standup, pre-review your PRs, and wrap up your evening, all tracked on a matrix-rain dashboard.**
 
+[![CI](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml/badge.svg)](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-launchd-black?logo=apple)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-headless-d97757)
 ![Python](https://img.shields.io/badge/Python-3.10%2B%20stdlib%20only-3776AB?logo=python&logoColor=white)
