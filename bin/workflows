@@ -4,11 +4,13 @@
 #                        (starts/kickstarts the launchd server if it's down)
 #   workflows --dump     print the HTML once to stdout
 #   workflows --port N   serve manually on another port (see --help)
-URL="http://127.0.0.1:8787"
+# shellcheck source=/dev/null
+. "$HOME/.claude/ccyclops/config.sh" 2>/dev/null
+URL="http://127.0.0.1:${DASHBOARD_PORT:-8787}"
 
 if [ $# -eq 0 ]; then
   if ! curl -sf -m 2 -o /dev/null "$URL"; then
-    launchctl kickstart "gui/$(id -u)/__PREFIX__.claude-workflows" 2>/dev/null
+    launchctl kickstart "gui/$(id -u)/${LAUNCHD_PREFIX:-com.$(whoami)}.claude-workflows" 2>/dev/null
     for _ in 1 2 3 4 5; do
       curl -sf -m 2 -o /dev/null "$URL" && break
       sleep 1

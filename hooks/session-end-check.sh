@@ -1,19 +1,23 @@
 #!/bin/bash
-# SessionEnd hook: notify about leftover rails servers, Claude worktrees, and unpushed commits.
+# SessionEnd hook: notify about leftover dev servers, Claude worktrees, and unpushed commits.
+# shellcheck source=/dev/null
+. "$HOME/.claude/ccyclops/config.sh" 2>/dev/null
 input=$(cat)
 cwd=$(echo "$input" | jq -r '.cwd // empty' 2>/dev/null)
-[ -n "$cwd" ] && [ -d "$cwd" ] && cd "$cwd"
+[ -n "$cwd" ] && [ -d "$cwd" ] && { cd "$cwd" || exit 0; }
 
 msgs=()
 
-ports=$(lsof -nP -iTCP:3000 -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1}' | sort -u | tr '\n' ' ')
-[ -n "$ports" ] && msgs+=("Server still on :3000 ($ports)")
+for port in ${DEV_SERVER_PORTS-3000}; do
+  procs=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {print $1}' | sort -u | tr '\n' ' ')
+  [ -n "$procs" ] && msgs+=("Server still on :$port (${procs% })")
+done
 
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   wt=$(git worktree list 2>/dev/null | grep -c '\.claude/worktrees')
   [ "$wt" -gt 0 ] && msgs+=("$wt Claude worktree(s) left")
-  up=$(git log --oneline @{u}..HEAD 2>/dev/null | wc -l | tr -d ' ')
-  [ "${up:-0}" -gt 0 ] && msgs+=("$up unpushed commit(s) on $(git branch --show-current))")
+  up=$(git log --oneline '@{u}..HEAD' 2>/dev/null | wc -l | tr -d ' ')
+  [ "${up:-0}" -gt 0 ] && msgs+=("$up unpushed commit(s) on $(git branch --show-current)")
 fi
 
 if [ ${#msgs[@]} -gt 0 ]; then

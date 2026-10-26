@@ -8,9 +8,10 @@ Scans on every request (a browser refresh always shows live state):
   * ~/.claude/logs/<name>-cron.log        -> run history (=== ... start === / === exit: N === blocks)
   * ~/.claude/commands/*.md frontmatter   -> descriptions + manual commands
   * ~/.claude/settings.json               -> session hooks
+  * ~/.claude/ccyclops/config.sh          -> port and config location (written by install.sh)
 
 Usage:
-  workflows                 serve on http://127.0.0.1:8787 and open the browser
+  workflows                 serve on http://127.0.0.1:<DASHBOARD_PORT> (default 8787) and open the browser
   workflows --port 9000     serve on another port
   workflows --no-open       don't open the browser
   workflows --dump          print the HTML once to stdout (no server)
@@ -22,6 +23,7 @@ import html
 import json
 import plistlib
 import re
+import shlex
 import subprocess
 import sys
 import threading
@@ -39,10 +41,32 @@ SETTINGS = CLAUDE_DIR / "settings.json"
 WEEKDAYS = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 QUOTES_FILE = Path(__file__).with_name("workflows-quotes.json")
 DISMISSED_FILE = CLAUDE_DIR / "cache" / "workflows-dismissed.json"
+CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
+
+
+def load_config() -> dict:
+    """KEY -> value from the installed config (install.sh writes it shell-quoted)."""
+    out = {}
+    try:
+        lines = CONFIG_FILE.read_text().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        m = re.match(r"([A-Za-z_]\w*)=(.*)$", line)
+        if m:
+            try:
+                out[m[1]] = "".join(shlex.split(m[2]))
+            except ValueError:
+                pass
+    return out
+
+
+CONFIG = load_config()
+PORT = int(CONFIG.get("DASHBOARD_PORT") or 8787)
 
 # Hand-written descriptions win over anything derived from files.
 DESCRIPTIONS = {
-    "workflows": "This dashboard — serves this page at localhost:8787, always running, "
+    "workflows": f"This dashboard — serves this page at localhost:{PORT}, always running, "
                  "listing every Claude automation on this Mac.",
 }
 
@@ -56,7 +80,7 @@ class Run:
     summary: str
     body: str
     watchdog: bool = False
-    cost: float | None = None    # from job-lib's "meta: cost $X · N turns · Ns" line
+    cost: float | None = None    # from run-job.sh's "meta: cost $X · N turns · Ns" line
     turns: int | None = None
     dur: int | None = None
 
@@ -667,7 +691,7 @@ def build_html() -> str:
   <section><h2>Session hooks</h2>
     <p class="sub">scripts Claude Code fires automatically at the start and end of every session (configured in ~/.claude/settings.json).</p>
     <table class="hooks">{hooks_html or '<tr><td colspan="3">None.</td></tr>'}</table></section>
-  <footer>docs: ~/.claude/AUTOMATIONS.md · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
+  <footer>settings: {e(CONFIG.get("CCYCLOPS_CONFIG") or "config.sh in your clone")} — edit it, then run ./install.sh · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
 </div>
 <script>const QUOTES = {json.dumps(load_quotes(), ensure_ascii=False)};</script>
 <script>{JS}</script>
@@ -730,7 +754,7 @@ def serve(port: int, open_browser: bool):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--port", type=int, default=8787)
+    ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--dump", action="store_true", help="print HTML to stdout and exit")
     args = ap.parse_args()
