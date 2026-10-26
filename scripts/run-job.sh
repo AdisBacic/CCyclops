@@ -133,7 +133,7 @@ run_once() {
 }
 
 mkdir -p "$(dirname "$LOG")"
-FIRST_LINE=$(( $(wc -l <"$LOG" 2>/dev/null || echo 0) + 1 ))
+FIRST_LINE=$(( $( { wc -l <"$LOG"; } 2>/dev/null || echo 0) + 1 ))  # no log yet on the first run
 {
   echo "=== $(date '+%Y-%m-%d %H:%M') ${JOB} cron start ==="
   if ! preflight; then
