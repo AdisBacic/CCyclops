@@ -117,6 +117,41 @@ These are the load-bearing decisions — keep them when you fork:
 3. **Fail loud, never thinner.** If a data feed errors, the job refuses to write and notifies you (`FEED FAILURE`), instead of producing a note that looks fine but is silently missing data.
 4. **Control flow lives in bash, not the model.** Watchdog (15 min), one retry, JSON parsing, cost logging, usage-limit detection, and macOS notifications are all in `scripts/job-lib.sh` — the LLM is treated like an API dependency.
 
+## Uninstall
+
+Everything the installer put in place, removed in reverse. Set `PREFIX` to the launchd label prefix you chose during install:
+
+```bash
+PREFIX="com.$(whoami)"
+
+# launchd agents
+for name in standup wrapdown pr-queue workflows; do
+  launchctl bootout "gui/$(id -u)/$PREFIX.claude-$name" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$PREFIX.claude-$name.plist"
+done
+
+# app bundle and launcher
+rm -rf "$HOME/Applications/Claude Workflows.app" "$HOME/.local/bin/workflows"
+
+# session hooks — unregister from settings.json, leaving your other hooks alone
+jq --arg h "$HOME" '
+  def drop: map(.hooks |= map(select(.command as $c
+                | ["ticket-context.sh", "session-end-check.sh", "ticket-log.sh"]
+                | map($h + "/.claude/hooks/" + .) | index($c) | not)))
+            | map(select(.hooks | length > 0));
+  if .hooks then .hooks |= with_entries(.value |= drop) else . end
+' ~/.claude/settings.json > ~/.claude/settings.json.tmp && mv ~/.claude/settings.json.tmp ~/.claude/settings.json
+
+# commands, scripts, hooks
+cd ~/.claude && rm -f \
+  commands/{catchup,pr-queue,standup,veckan,wrapdown}.md \
+  hooks/{session-end-check,ticket-context,ticket-log}.sh \
+  scripts/{job-lib,pr-queue-cron,standup-calendar,standup-cron,standup-git,veckan-prs,wrapdown-cron}.sh \
+  scripts/{make_icon,mask_icon,workflows-dashboard}.py
+```
+
+Left in place on purpose: your notes in `<vault>/Workflows/`, your personal `~/.claude/scripts/workflows-quotes.json` and `workflows-favicon.png`, the run logs (`~/.claude/logs/*-cron.log`, `*-launchd.log`), and the calendar cache (`~/.claude/cache/standup-calendar-*.txt`). Delete them by hand for a clean slate. If you added the Dock icon, drag it out of the Dock.
+
 ## Troubleshooting
 
 <details>
