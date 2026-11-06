@@ -41,6 +41,8 @@ cat > "$FAKE/claude" <<'EOF'
 #!/bin/bash
 # Logs its arguments one per line, answers like `claude -p --output-format json`.
 { echo "--- call"; echo "cwd=$PWD"; printf '%s\n' "$@"; } >> "$SANDBOX/claude.log"
+# FAKE_LEFTOVER=1: leave a background child behind, like a tool a job started.
+if [ -n "${FAKE_LEFTOVER:-}" ]; then sleep 300 </dev/null & echo $! > "$SANDBOX/leftover.pid"; fi
 jq -n --arg r "${FAKE_RESULT:-Wrote the note}" --argjson e "${FAKE_ERROR:-false}" \
   '{type: "result", is_error: $e, result: $r, total_cost_usd: 0.42, num_turns: 7, duration_ms: 12000, session_id: "s1"}'
 EOF
@@ -154,6 +156,9 @@ check "FEED FAILURE exits 2" test "$rc" = 2
 rc=0; FAKE_ERROR=true FAKE_RESULT="Claude usage limit reached" job standup || rc=$?
 check "usage limit exits 1" test "$rc" = 1
 check "and neither one retries" bash -c '! grep -q retrying "$1"' _ "$C/logs/standup-cron.log"
+FAKE_LEFTOVER=1 job standup
+check "a child a tool left behind dies with claude (#5)" bash -c \
+  'sleep 1; case "$(ps -o stat= -p "$(cat "$1")" 2>/dev/null)" in ""|Z*) ;; *) exit 1 ;; esac' _ "$SANDBOX/leftover.pid"
 python3 -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("max-turns: 50\n", "max-turns: 50\nmodel: sonnet\n", 1))' "$C/commands/standup.md"
 job standup
 check "a command's model: line beats MODEL" test "$(arg_after --model)" = sonnet
