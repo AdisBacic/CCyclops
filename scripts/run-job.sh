@@ -99,19 +99,26 @@ run_once() {
   tmp=$(mktemp)
   # env -u: strip nested-session guards so this also works when started from
   # inside a Claude session (no-op under launchd).
+  # set -m: claude gets its own process group (macOS has no setsid), so the
+  # watchdog can kill it together with the tools it started - a stalled gh or
+  # git call would otherwise outlive it and sit next to the retry (#5).
+  set -m
   env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
     "$CLAUDE_BIN" -p "$PROMPT" "${ARGS[@]}" </dev/null >"$tmp" 2>&1 &
   local cpid=$!
+  set +m
   # Watchdog: a 2026-07-08 run hung forever on stalled API connections.
   while kill -0 "$cpid" 2>/dev/null && [ "$waited" -lt "$limit" ]; do
     sleep 10; waited=$((waited + 10))
   done
   if kill -0 "$cpid" 2>/dev/null; then
-    echo "WATCHDOG: claude ($cpid) still running after ${WATCHDOG_MINUTES:-15} min - killing"
-    kill -9 "$cpid" 2>/dev/null; wait "$cpid" 2>/dev/null
+    echo "WATCHDOG: claude ($cpid) still running after ${WATCHDOG_MINUTES:-15} min - killing it and its tools"
+    kill -9 -- "-$cpid" 2>/dev/null; wait "$cpid" 2>/dev/null
     rm -f "$tmp"; return 124
   fi
   wait "$cpid"; rc=$?
+  # Reap any background child a tool left behind; it would hold $tmp open.
+  kill -9 -- "-$cpid" 2>/dev/null
 
   if jq -e . "$tmp" >/dev/null 2>&1; then
     local result is_err
