@@ -46,6 +46,22 @@ flowchart LR
     jobs -->|structured logs| D[dashboard :8787]
 ```
 
+## Why it's built this way
+
+**You own the workflow; Claude is one step in it.** The schedule, the retries and the permissions live in files on your Mac that you can read and change. Claude gets a prompt and a list of allowed tools, and hands back a note.
+
+| What you get | How it works |
+|---|---|
+| **Claude only gets what you allow** | Each job runs with its own `allowed-tools` list, the same one the manual `/command` uses. Whatever that list says, edits are denied outside your notes folder: `~/.claude` and your repos are read-only to jobs. The PR reviewer's list has no git and no GitHub write commands, so it can read a diff but can't comment, approve or push. |
+| **You own the control flow** | `launchd` starts each job. `scripts/run-job.sh` (under 200 lines of bash) does the pre-flight checks, the watchdog, the one retry, the exit codes and the notifications. Claude never decides whether a job runs, runs again, or counts as failed. |
+| **Facts come from scripts, not the model** | Commits, meetings and PR lists are gathered by shell scripts and injected into the prompt. Claude writes the summary; it doesn't go looking for what happened. Cheap, reproducible, and you can run every feed by hand. |
+| **A broken feed stops the job** | If a feed errors, the job refuses to write and notifies you (`FEED FAILURE`), instead of producing a note that looks fine but is missing data. |
+| **Every run is capped and accounted for** | A turn cap and a watchdog bound each run. The log and the dashboard show the result, cost, turns, duration and model per run, and you pick the model per job from a dropdown. |
+| **Local on purpose** | The jobs read your clones, your calendar and your notes, so they run where those are: no server, no database, no credentials handed to a cloud runner. If the Mac is asleep at 09:00, the job runs once when you open the lid. If you're not at the computer, there's no standup to write. |
+| **Plain files all the way down** | A job is one Markdown file and one config line. Output is Markdown in a folder. The dashboard is one stdlib-only Python file. `./install.sh --uninstall` takes it all out again and leaves your notes. |
+
+Forking it? These are the load-bearing decisions — keep them, change everything else.
+
 ## What it writes
 
 A made-up week of output is in [`examples/`](examples): a [daily note](examples/Workflows/Daily/2026-10-20.md) with the morning standup and the evening wrap-up, a [PR pre-review](examples/Workflows/Reviews/shop-PR482.md) that catches a rounding bug, the [ticket note](examples/Workflows/Tickets/1234%20Discount%20codes%20at%20checkout.md) the session hooks keep, and the [weekly rollup](examples/Workflows/Weekly/2026-W43.md). The part you paste into the team chat each morning:
@@ -192,15 +208,6 @@ Everything the agents write is **plain Markdown in plain folders**:
 | **Page favicon** | replace `~/.claude/scripts/workflows-favicon.png` |
 | **App icon** | run `tools/mask_icon.py` on any square PNG to get macOS-style rounded icons, or `tools/make_icon.py` for the generated default; compile with `iconutil` |
 
-## Design principles
-
-These are the load-bearing decisions — keep them when you fork:
-
-1. **Deterministic work in shell, Claude only synthesizes.** Git, calendar, and PR data are gathered by scripts and injected as context. Cheap, reproducible, debuggable.
-2. **Scoped permissions.** Every job runs with `--permission-mode acceptEdits`, its command's own `allowed-tools` list, and deny rules that block edits outside the vault — `~/.claude` and your repos are read-only to jobs. The PR reviewer's allowlist simply contains no GitHub write commands and no git.
-3. **Fail loud, never thinner.** If a data feed errors, the job refuses to write and notifies you (`FEED FAILURE`), instead of producing a note that looks fine but is silently missing data.
-4. **Control flow lives in bash, not the model.** Watchdog, one retry, JSON parsing, cost logging, usage-limit detection, and macOS notifications are all in `scripts/run-job.sh` — the LLM is treated like an API dependency.
-
 ## Uninstall
 
 ```bash
@@ -237,7 +244,7 @@ On a Claude subscription, the rolling usage window can starve scheduled jobs. Th
 
 ## Development
 
-`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`, runs jobs and hooks, flips settings, and uninstalls — 70-odd checks, nothing touches your real setup. CI runs it on macOS, plus shellcheck.
+`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`, runs jobs and hooks, flips settings, and uninstalls — 80-odd checks, nothing touches your real setup. CI runs it on macOS, plus shellcheck.
 
 ## License
 
