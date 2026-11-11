@@ -49,7 +49,7 @@ DEV_SERVER_PORTS="3000"        # warn if something still listens here, e.g. "300
 # ── Runner & dashboard ───────────────────────────────────────────────────────
 MAX_TURNS=40                   # turn cap per job (a command can set its own max-turns:)
 MODEL=""                       # model for scheduled jobs, e.g. "sonnet" ("" = your Claude Code default;
-                               # a command's own model: line wins)
+                               # a command's own model: line wins, the dashboard's dropdown beats both)
 WATCHDOG_MINUTES=15            # kill a job that runs longer than this
 DASHBOARD_PORT=8787
 LAUNCHD_PREFIX="com.$(whoami)" # launchd labels become <prefix>.claude-<job>
