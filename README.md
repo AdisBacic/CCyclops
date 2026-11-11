@@ -46,6 +46,109 @@ flowchart LR
     jobs -->|structured logs| D[dashboard :8787]
 ```
 
+## Set it up with Claude
+
+About 10 minutes. Each step is a prompt you paste into Claude Code — use the copy button on the block. Claude reads the repo, asks what it needs to know, and does the work. Prefer doing it by hand? Skip to [Install](#install).
+
+**1. Get the code and start Claude in it** (fork first if you plan to change the prompts)
+
+```bash
+git clone https://github.com/AdisBacic/CCyclops.git
+cd CCyclops
+claude
+```
+
+**2. Check that your Mac has what it needs**
+
+```text
+Read README.md and install.sh. Check which requirements are already on this Mac
+(Claude Code, gh, jq, Python 3.10+, icalBuddy, Chrome) and install the missing ones
+with Homebrew. Then check that gh is logged in. Finish with a list of anything I
+have to do myself, with the exact command for each. Don't run install.sh yet.
+```
+
+**3. Configure it for you**
+
+```text
+Set up CCyclops for me. Run ./install.sh once so it creates config.sh, then read
+config.example.sh and ask me, one question at a time: where my notes folder is,
+which folder holds my git clones, where my PRs live on GitHub (org or repos),
+which calendars to read (or none), what language the notes should be in, and
+what time I start and end my day. Write my answers into config.sh and set the
+three job times to fit my day. Run ./install.sh --dry-run and show me what it
+will change. Wait for my OK before you run ./install.sh for real.
+```
+
+**4. Try it**
+
+```text
+Run the standup job now: bash ~/.claude/scripts/run-job.sh standup
+Show me the note it wrote and what the run cost. If it failed, read
+~/.claude/logs/standup-cron.log, tell me the cause and fix it. Then open the
+dashboard with: ccyclops
+```
+
+That's a working setup. Everything below is optional.
+
+<details>
+<summary><b>Make it fit — one prompt per change</b></summary>
+
+<br>
+
+**Jira, Linear or another ticket style**
+
+```text
+My branches are named like feature/ABC-123-short-title. Set TICKET_PATTERN and
+IGNORE_BRANCHES in config.sh to match how I name branches, run ./install.sh, and
+show me with one of my real branch names that the ticket hooks pick out the
+right key.
+```
+
+**No Obsidian**
+
+```text
+I don't use Obsidian. Change the rules in commands/standup.md, commands/wrapdown.md
+and commands/weekly.md so the notes use plain Markdown links instead of
+[[wikilinks]], then run ./install.sh.
+```
+
+**Standup in my team's format**
+
+```text
+Here is a standup I wrote myself: <paste one>. Edit commands/standup.md so the
+copy-paste block matches its format, tone and language. Keep the feed check and
+the rest of the note as they are. Run ./install.sh, then run the standup job and
+show me the result.
+```
+
+**Only the parts I want**
+
+```text
+I only want <for example: the standup and the dashboard>. Set every other job to
+"off" or "manual" in config.sh and switch off the hooks I don't need. Tell me
+what each change turns off before you run ./install.sh.
+```
+
+**Keep the cost down**
+
+```text
+Look at the cost per run in ~/.claude/logs/*-cron.log. Suggest a model for each
+job, explain the trade-off in one line each, and set MODEL or the job's model:
+line to what I pick. Run ./install.sh when done.
+```
+
+**A job of my own**
+
+```text
+Read "Add your own job" in README.md. I want a new job that <what it should do
+and when>. Write commands/<name>.md with the smallest allowed-tools list that
+works, a feed check like the other jobs have, and a script in scripts/ for any
+data it needs. Add its JOB_ line to config.sh, run ./install.sh, run the job
+once and show me the output.
+```
+
+</details>
+
 ## Why it's built this way
 
 **You own the workflow; Claude is one step in it.** The schedule, the retries and the permissions live in files on your Mac that you can read and change. Claude gets a prompt and a list of allowed tools, and hands back a note.
@@ -107,7 +210,7 @@ cd CCyclops
 
 The installer copies everything into `~/.claude/`, registers the session hooks in `settings.json` (merging, never clobbering), builds the app bundle, and loads the launchd agents.
 
-> **The lazy path:** clone the repo and tell Claude Code *"read this repo and set it up for me"*. The prompts, scripts, and this README are all the context it needs — it can also adapt any part to your workflow while it's at it (different times, another ticket system, no calendar…).
+> **Rather have Claude do it?** [Set it up with Claude](#set-it-up-with-claude) has a copy-paste prompt for each step, and for adapting it to your workflow (another ticket system, no calendar, your own job…).
 
 Then:
 
