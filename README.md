@@ -126,7 +126,7 @@ HOOK_TICKET_LOG=true
 | no dashboard / no calendar | `DASHBOARD=false` · `CALENDAR=false` |
 | stop a session hook | `HOOK_TICKET_LOG=false` |
 | notes in another language | `LANGUAGE="Svenska"` |
-| run jobs on a cheaper model | `MODEL="sonnet"` (a command's own `model:` line wins) |
+| run jobs on a cheaper model | `MODEL="sonnet"` (a command's own `model:` line wins) — or pick one per job in the dashboard's dropdown, which beats both |
 | Jira-style ticket keys | `TICKET_PATTERN="[A-Z]+-[0-9]+"` |
 | other dev-server ports to warn about | `DEV_SERVER_PORTS="3000 5173"` |
 
@@ -161,7 +161,7 @@ Write release notes for these PRs to `{{VAULT}}/Workflows/Releases/<today>.md` �
 | `max-turns` | turn cap (default `MAX_TURNS`) |
 | `preflight` | checks before Claude starts: `gh-auth`, `calendar-cache` |
 | `add-dirs` | extra folders Claude may read: `projects` |
-| `model` | model for this job, also used when you run it by hand (default `MODEL`) |
+| `model` | model for this job, also used when you run it by hand (default `MODEL`; the dashboard's dropdown overrides it for scheduled runs) |
 
 Any `{{KEY}}` in a command is filled from `config.sh` — including keys you add yourself (`TEAM="Platform"` → `{{TEAM}}`). A new session hook works the same way: drop `hooks/<name>.sh` whose second line reads `# SessionEnd hook: …` (or `SessionStart`, …) and switch it with `HOOK_<NAME>`.
 

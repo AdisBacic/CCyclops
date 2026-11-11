@@ -43,6 +43,8 @@ cat > "$FAKE/claude" <<'EOF'
 { echo "--- call"; echo "cwd=$PWD"; printf '%s\n' "$@"; } >> "$SANDBOX/claude.log"
 # FAKE_LEFTOVER=1: leave a background child behind, like a tool a job started.
 if [ -n "${FAKE_LEFTOVER:-}" ]; then sleep 300 </dev/null & echo $! > "$SANDBOX/leftover.pid"; fi
+# FAKE_WARNING=1: a warning on stderr, like claude's "[claude-code:unrecognized_model]".
+if [ -n "${FAKE_WARNING:-}" ]; then echo '[claude-code:unrecognized_model] {"model":"x"}' >&2; fi
 jq -n --arg r "${FAKE_RESULT:-Wrote the note}" --argjson e "${FAKE_ERROR:-false}" \
   '{type: "result", is_error: $e, result: $r, total_cost_usd: 0.42, num_turns: 7, duration_ms: 12000, session_id: "s1"}'
 EOF
@@ -162,6 +164,30 @@ check "a child a tool left behind dies with claude (#5)" bash -c \
 python3 -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("max-turns: 50\n", "max-turns: 50\nmodel: sonnet\n", 1))' "$C/commands/standup.md"
 job standup
 check "a command's model: line beats MODEL" test "$(arg_after --model)" = sonnet
+rc=0; FAKE_WARNING=1 job standup || rc=$?
+check "a warning on claude's stderr doesn't fail the run" bash -c \
+  '[ "$1" = 0 ] && ! tail -4 "$2" | grep -q -e retrying -e unrecognized_model' _ "$rc" "$C/logs/standup-cron.log"
+
+echo "model dropdown"
+PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+python3 "$C/scripts/workflows-dashboard.py" --no-open --port "$PORT" >/dev/null 2>&1 &
+DASH=$!
+set_model() { curl -s -o /dev/null -w '%{http_code}' --retry 5 --retry-connrefused --retry-delay 1 \
+  -H 'Content-Type: application/json' -d "{\"name\": \"$1\", \"model\": \"$2\"}" "http://127.0.0.1:$PORT/model"; }
+card() { curl -s "http://127.0.0.1:$PORT/" | grep -o "<select class=\"modelsel\" data-name=\"$1\".*</select>"; }
+check "picking a model is saved" test "$(set_model standup opus)" = 200
+check "and shown as selected" bash -c '[[ "$1" == *"value=\"opus\" selected"* ]]' _ "$(card standup)"
+check "a job's default is its model: line" bash -c '[[ "$1" == *">default · sonnet<"* ]]' _ "$(card standup)"
+check "or MODEL" bash -c '[[ "$1" == *">default · haiku<"* ]]' _ "$(card pr-queue)"
+check "the dashboard's own card has no dropdown" bash -c '[ -z "$1" ]' _ "$(card workflows || true)"
+job standup
+check "the pick beats the model: line and MODEL" test "$(arg_after --model)" = opus
+check "an unknown model or job is refused" test "$(set_model standup gpt)$(set_model workflows opus)" = 400400
+check "picking default clears it" test "$(set_model standup "")" = 200
+job standup
+check "back on the model: line" test "$(arg_after --model)" = sonnet
+kill "$DASH"; wait "$DASH" 2>/dev/null || true
+
 mv "$HOME/My Vault" "$HOME/gone"
 rc=0; job standup || rc=$?
 check "missing VAULT fails pre-flight (exit 3)" test "$rc" = 3

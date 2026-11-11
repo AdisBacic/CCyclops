@@ -9,6 +9,7 @@ Scans on every request (a browser refresh always shows live state):
   * ~/.claude/commands/*.md frontmatter   -> descriptions + manual commands
   * ~/.claude/settings.json               -> session hooks
   * ~/.claude/ccyclops/config.sh          -> port and config location (written by install.sh)
+  * ~/.claude/ccyclops/job-models.json    -> the model picked per job in the dropdown (read by run-job.sh)
 
 Usage:
   ccyclops                  serve on http://127.0.0.1:<DASHBOARD_PORT> (default 8787) and open the browser
@@ -42,6 +43,9 @@ WEEKDAYS = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat"
 QUOTES_FILE = Path(__file__).with_name("workflows-quotes.json")
 DISMISSED_FILE = CLAUDE_DIR / "cache" / "workflows-dismissed.json"
 CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
+MODELS_FILE = CLAUDE_DIR / "ccyclops" / "job-models.json"   # {"<job>": "<model>"}
+MODEL_CHOICES = ("opus", "sonnet", "haiku")
+MODELS_LOCK = threading.Lock()
 
 
 def load_config() -> dict:
@@ -105,6 +109,7 @@ class Workflow:
     runs: list = field(default_factory=list)
     loaded: bool = False
     launchctl_status: str = ""
+    default_model: str | None = None   # set for run-job.sh jobs; "" = the Claude Code default
 
 
 def read_text(path: Path) -> str:
@@ -124,13 +129,16 @@ def first_sentence(text: str, limit: int = 180) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
-def frontmatter_description(md: Path) -> str:
-    text = read_text(md)
-    m = re.match(r"\A---\n(.*?)\n---", text, re.S)
+def frontmatter_field(md: Path, key: str) -> str:
+    m = re.match(r"\A---\n(.*?)\n---", read_text(md), re.S)
     if not m:
         return ""
-    d = re.search(r"^description:\s*(.+)$", m.group(1), re.M)
-    return first_sentence(d.group(1)) if d else ""
+    d = re.search(rf"^{re.escape(key)}:[ \t]*(.+)$", m.group(1), re.M)
+    return d.group(1).strip() if d else ""
+
+
+def frontmatter_description(md: Path) -> str:
+    return first_sentence(frontmatter_field(md, "description"))
 
 
 def script_blurb(path: Path) -> str:
@@ -314,12 +322,15 @@ def scan_workflows(commands: dict) -> list:
                        or script_blurb(Path(str(script))))
         log = find_log(name, data)
         loaded, status = state.get(label, (False, "not loaded"))
+        default_model = None
+        if str(script).endswith("/run-job.sh"):  # same fallback as run-job.sh: model: line, then MODEL
+            default_model = frontmatter_field(COMMANDS_DIR / f"{name}.md", "model") or CONFIG.get("MODEL", "")
         flows.append(Workflow(
             name=name, label=label, plist=pl,
             schedule=humanize_schedule(data), next_run=next_run_text(data),
             description=description, program=str(script),
             log_path=log, runs=parse_runs(log)[::-1] if log else [],
-            loaded=loaded, launchctl_status=status,
+            loaded=loaded, launchctl_status=status, default_model=default_model,
         ))
     return flows
 
@@ -341,6 +352,34 @@ def scan_hooks() -> list:
         if scripts:
             out.append((event, scripts))
     return out
+
+
+def load_models() -> dict:
+    try:
+        d = json.loads(read_text(MODELS_FILE))
+        return {k: v for k, v in d.items() if isinstance(v, str) and v}
+    except Exception:
+        return {}
+
+
+def set_job_model(name: str, model: str) -> dict:
+    """Pin a job to a model; "" puts it back on its default. Applies from the next run."""
+    flow = next((f for f in scan_workflows(load_commands()) if f.name == name), None)
+    if not flow or flow.default_model is None:
+        return {"ok": False, "error": f"no job named {name!r}"}
+    if model and model not in MODEL_CHOICES:
+        return {"ok": False, "error": f"unknown model {model!r}"}
+    with MODELS_LOCK:
+        models = load_models()
+        if model:
+            models[name] = model
+        else:
+            models.pop(name, None)
+        MODELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = MODELS_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(models, indent=1, sort_keys=True) + "\n")
+        tmp.replace(MODELS_FILE)
+    return {"ok": True}
 
 
 def load_quotes() -> list:
@@ -458,6 +497,10 @@ h2 { font-size: 11px; font-weight: 600; letter-spacing: .28em; text-transform: u
 .name { font-size: 16px; font-weight: 600; color: #eaf5e7; }
 .chip { background: var(--chip); border: 1px solid var(--line); color: var(--dim);
   border-radius: 99px; padding: 1.5px 10px; font-size: 11.5px; white-space: nowrap; }
+.modelsel { background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 99px; padding: 1.5px 6px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.modelsel:hover, .modelsel:focus { outline: none; border-color: var(--ok); color: var(--ink); }
+.modelsel.err { border-color: var(--err); color: var(--err); }
 .right { margin-left: auto; color: var(--dim); font-size: 12px; white-space: nowrap; }
 .right .ok { color: var(--ok); } .right .err { color: var(--err); }
 .desc { color: var(--dim); margin: 7px 0 0; max-width: 62ch; }
@@ -516,6 +559,20 @@ document.addEventListener("click", async ev => {
   const banner = btn.closest(".banner");
   btn.closest(".banner-line").remove();
   if (banner && !banner.querySelector(".banner-line")) banner.remove();
+});
+
+// ---- per-job model dropdown (persists server-side, used from the job's next run) ----
+document.addEventListener("change", async ev => {
+  const sel = ev.target.closest(".modelsel");
+  if (!sel) return;
+  let ok = false;
+  try {
+    const r = await fetch("/model", {method: "POST", headers: {"Content-Type": "application/json"},
+                                     body: JSON.stringify({name: sel.dataset.name, model: sel.value})});
+    ok = r.ok;
+  } catch (e) {}
+  sel.classList.toggle("err", !ok);
+  sel.title = ok ? "Model for this job — used from its next run" : "could not save the model";
 });
 
 // ---- matrix rain ----
@@ -594,7 +651,7 @@ async function showQuote(text) {
 """
 
 
-def render_workflow(f: Workflow) -> str:
+def render_workflow(f: Workflow, models: dict) -> str:
     last = f.runs[0] if f.runs else None
     if last and last.exit == 0:
         dot, last_txt = "ok", f'<span class="ok">✓</span> {e(last.ts)}'
@@ -625,12 +682,22 @@ def render_workflow(f: Workflow) -> str:
     if hist:
         hist = f'<details><summary>run history</summary>{hist}</details>'
 
+    model_sel = ""
+    if f.default_model is not None:
+        picked = models.get(f.name, "")
+        choices = MODEL_CHOICES if picked in ("", *MODEL_CHOICES) else (*MODEL_CHOICES, picked)  # hand-edited
+        opts = f'<option value="">default · {e(f.default_model or "Claude Code")}</option>' + "".join(
+            f'<option value="{e(m)}"{" selected" if m == picked else ""}>{e(m)}</option>' for m in choices)
+        model_sel = (f'<select class="modelsel" data-name="{e(f.name)}" '
+                     f'title="Model for this job — used from its next run">{opts}</select>')
+
     return f"""
     <div class="card">
       <div class="row">
         <span class="dot {dot}{live}"></span>
         <span class="name">{e(DISPLAY_NAMES.get(f.name, f.name))}</span>
         <span class="chip">{e(f.schedule)}</span>
+        {model_sel}
         <span class="right">last: {last_txt}</span>
       </div>
       <p class="desc">{e(f.description) or "&mdash;"}</p>
@@ -643,6 +710,7 @@ def render_workflow(f: Workflow) -> str:
 def build_html() -> str:
     commands = load_commands()
     flows = scan_workflows(commands)
+    models = load_models()
     hooks = scan_hooks()
     fails = recent_failures(flows)
     scheduled_names = {f.name for f in flows}
@@ -687,7 +755,7 @@ def build_html() -> str:
   {banner}
   <section><h2>Scheduled</h2>
     <p class="sub">launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.</p>
-    {"".join(render_workflow(f) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
+    {"".join(render_workflow(f, models) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
   <section class="manual"><h2>Manual commands</h2>
     <p class="sub">slash commands you run yourself inside a Claude Code session — nothing happens until you type them.</p>
     {manual_html or '<p class="desc">None.</p>'}</section>
@@ -719,6 +787,22 @@ def serve(port: int, open_browser: bool):
             self.wfile.write(body)
 
         def do_POST(self):
+            if self.path == "/model":
+                # JSON only: forces a CORS preflight (never answered), so another
+                # web page can't change a job's model through this localhost server
+                try:
+                    assert self.headers.get("Content-Type", "").startswith("application/json")
+                    req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    res = set_job_model(str(req.get("name", "")), str(req.get("model", "")))
+                except Exception:
+                    res = {"ok": False, "error": "bad request"}
+                body = json.dumps(res).encode()
+                self.send_response(200 if res["ok"] else 400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
             if self.path != "/dismiss":
                 self.send_error(404)
                 return
