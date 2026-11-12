@@ -20,7 +20,7 @@ case "${1:-}" in
   mine)             q="is:pr is:open author:@me"
                     line="$line"' + " [\(if .isDraft then "draft" else (.reviewDecision // "no review" | ascii_downcase) end)]"' ;;
   merged-week)      # BSD date, else GNU date (Linux, WSL)
-                    since=$(date -v-7d '+%Y-%m-%d' 2>/dev/null || date -d '7 days ago' '+%Y-%m-%d')
+                    since=$(date -v-7d '+%Y-%m-%d' 2>/dev/null || date -d '7 days' '+%Y-%m-%d')
                     q="is:pr author:@me merged:>=$since" ;;
   *) echo "usage: $0 review-requested|mine|merged-week" >&2; exit 1 ;;
 esac

@@ -74,7 +74,7 @@ EOF
 else
   # Refresh the updated: field if the note has one.
   # -i.bak: the one in-place form both BSD and GNU sed accept
-  sed -i.bak "s/^updated: .*/updated: $TODAY/" "$NOTE" 2>/dev/null; rm -f "$NOTE.bak"
+  sed -i.bak "s/^updated: .*/updated: $TODAY/" "$NOTE" 2>/dev/null
   # Ensure a Work log section exists to append under.
   grep -q '^## Work log' "$NOTE" || printf '\n## Work log\n' >> "$NOTE"
 fi
