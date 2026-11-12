@@ -14,6 +14,8 @@
 #   add-dirs       extra folders claude may read: projects (the vault and
 #                  ~/.claude are always added)
 #   model          model for this job (default: MODEL in config.sh)
+# The dashboard's model dropdown beats both: its picks are kept in
+# ~/.claude/ccyclops/job-models.json ({"<job>": "<model>"}).
 # Jobs run from the vault, and whatever the allowlist says, writes only land
 # there: Edit/Write are denied in ~/.claude and PROJECTS_DIR.
 #
@@ -30,6 +32,7 @@ JOB="${1:?usage: run-job.sh <job>   (a file name from ~/.claude/commands, withou
 CMD="$HOME/.claude/commands/$JOB.md"
 LOG="$HOME/.claude/logs/$JOB-cron.log"
 CONFIG="$HOME/.claude/ccyclops/config.sh"
+MODELS="$HOME/.claude/ccyclops/job-models.json"
 USAGE_LIMIT=0
 
 # shellcheck source=/dev/null
@@ -73,7 +76,9 @@ build_args() {
   local turns tools model deny d
   turns=$(fm max-turns | grep -E '^[0-9]+$' || echo "${MAX_TURNS:-40}")
   tools=$(fm allowed-tools | sed 's/, */,/g')
-  model=$(fm model); model="${model:-${MODEL:-}}"
+  model=$(jq -r --arg j "$JOB" '.[$j] // empty | strings' "$MODELS" 2>/dev/null)
+  [ -n "$model" ] || model=$(fm model)
+  model="${model:-${MODEL:-}}"
   ARGS=(--output-format json --max-turns "$turns" --permission-mode acceptEdits
         --add-dir "$VAULT" --add-dir "$HOME/.claude"
         --allowedTools "Skill,${tools:-Read,Write,Edit,Glob,Grep}")
@@ -105,7 +110,7 @@ run_once() {
   # git call would otherwise outlive it and sit next to the retry (#5).
   set -m
   env -u CLAUDECODE -u CLAUDE_CODE_ENTRYPOINT \
-    "$CLAUDE_BIN" -p "$PROMPT" "${ARGS[@]}" </dev/null >"$tmp" 2>&1 &
+    "$CLAUDE_BIN" -p "$PROMPT" "${ARGS[@]}" </dev/null >"$tmp" 2>"$tmp.err" &
   local cpid=$!
   set +m
   # Watchdog: a 2026-07-08 run hung forever on stalled API connections.
@@ -115,18 +120,20 @@ run_once() {
   if kill -0 "$cpid" 2>/dev/null; then
     echo "WATCHDOG: claude ($cpid) still running after ${WATCHDOG_MINUTES:-15} min - killing it and its tools"
     kill -9 -- "-$cpid" 2>/dev/null; wait "$cpid" 2>/dev/null
-    rm -f "$tmp"; return 124
+    rm -f "$tmp" "$tmp.err"; return 124
   fi
   wait "$cpid"; rc=$?
   # Reap any background child a tool left behind; it would hold $tmp open.
   kill -9 -- "-$cpid" 2>/dev/null
 
+  # stderr stays out of $tmp: one warning line from claude in front of the
+  # JSON made a run that had succeeded look like a crash, and run twice.
   if jq -e . "$tmp" >/dev/null 2>&1; then
     local result is_err
     result=$(jq -r '.result // empty' "$tmp")
     is_err=$(jq -r '.is_error // false' "$tmp")
     [ -n "$result" ] && echo "$result"
-    jq -r '"meta: cost $\((.total_cost_usd // 0) * 100 | round / 100) · \(.num_turns // 0) turns · \((.duration_ms // 0) / 1000 | round)s · session \(.session_id // "?")"' "$tmp"
+    jq -r '"meta: cost $\((.total_cost_usd // 0) * 100 | round / 100) · \(.num_turns // 0) turns · \((.duration_ms // 0) / 1000 | round)s · session \(.session_id // "?")\((.modelUsage // {}) | keys | if length > 0 then " · model " + join(",") else "" end)"' "$tmp"
     if [ "$is_err" = "true" ] && [ "$rc" -eq 0 ]; then rc=1; fi
     if [ "$rc" -ne 0 ] && echo "$result" | grep -qiE 'usage limit|rate limit|quota|exceeded'; then
       USAGE_LIMIT=1
@@ -136,7 +143,8 @@ run_once() {
     cat "$tmp"  # crash output, not JSON
     [ "$rc" -eq 0 ] && rc=1
   fi
-  rm -f "$tmp"
+  [ "$rc" -eq 0 ] || cat "$tmp.err"
+  rm -f "$tmp" "$tmp.err"
   return "$rc"
 }
 
