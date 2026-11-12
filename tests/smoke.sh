@@ -141,7 +141,7 @@ check "round-trips odd characters through the installed config" bash -c \
   '. "$1"; [ "$SKIP_MEETING" = "Standup & Sync | \"Daily\"" ]' _ "$C/ccyclops/config.sh"
 python3 "$C/scripts/workflows-dashboard.py" --dump > "$SANDBOX/dash.html"
 check "dashboard renders the new schedules" grep -q "Fri 16:00" "$SANDBOX/dash.html"
-check "dashboard is branded CCyclops" grep -q "<title>CCyclops</title>" "$SANDBOX/dash.html"
+check "dashboard is branded CCyclops" grep -q "<title>CCyclops - Workflows</title>" "$SANDBOX/dash.html"
 check "its own card says dashboard" grep -q '<span class="name">dashboard</span>' "$SANDBOX/dash.html"
 
 echo "re-run with nothing changed"
