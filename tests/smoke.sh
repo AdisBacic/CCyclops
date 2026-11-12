@@ -276,8 +276,13 @@ check "keeps notes and quotes" test -f "$T/1234.md" -a -f "$C/scripts/workflows-
 
 echo "cron instead of launchd (Linux, WSL2 on Windows)"
 export CCYCLOPS_SCHEDULER=cron
-PORT=18787 URL="http://127.0.0.1:18787"
-up() { for _ in 1 2 3 4 5 6 7 8 9 10; do curl -sf -m 2 -o /dev/null "$URL" && return 0; sleep 0.5; done; return 1; }
+PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+URL="http://127.0.0.1:$PORT"
+up() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do curl -sf -m 5 -o /dev/null "$URL" && return 0; sleep 0.5; done
+  { pgrep -fl workflows-dashboard.py; tail -20 "$C/logs/workflows-launchd.log"; curl -sv -m 5 -o /dev/null "$URL"; } >&2 || true
+  return 1
+}
 cron_has() { grep -qF -- "$1" "$SANDBOX/crontab"; }
 echo '0 3 * * * /usr/local/bin/my-backup' > "$SANDBOX/crontab"
 printf '%s\n' 'JOB_WEEKLY="every 2h"' 'DASHBOARD=true' "DASHBOARD_PORT=$PORT" >> "$CCYCLOPS_CONFIG"
