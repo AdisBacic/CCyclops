@@ -8,6 +8,8 @@ config value arrives here as an environment variable.
   render <src> <dst>                   copy a template, replacing {{KEY}} with config values
   plist <job> <schedule> <dst>         launchd agent for a scheduled job
   dashboard-plist <dst>                launchd agent for the always-on dashboard
+  crontab <agents-dir>                 stdin: a crontab; stdout: the same with the CCyclops
+                                       block rebuilt from those agents (Linux / WSL)
   resolved <dst>                       the installed config sourced by scripts and hooks
   write-config <base> <dst> KEY...     put the setup answers into config.sh, keeping comments
 """
@@ -23,12 +25,15 @@ from pathlib import Path
 ASSIGN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 TOKEN = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 # Resolved by install.sh rather than written in config.sh.
-DERIVED = ["CLAUDE_BIN", "PYTHON3", "CCYCLOPS_REPO", "CCYCLOPS_CONFIG"]
+DERIVED = ["CLAUDE_BIN", "PYTHON3", "CCYCLOPS_REPO", "CCYCLOPS_CONFIG", "SCHEDULER"]
 DAYS = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6}
 DAY_GROUPS = {"daily": [], "weekdays": [1, 2, 3, 4, 5], "weekends": [6, 0]}
 # Values pasted into the !`shell` lines of commands/*.md must stay inside "...".
 UNSAFE = re.compile(r'["`$\\\n]')
 SCOPE_TERM = re.compile(r"(org|user):[\w.-]+|repo:[\w.-]+/[\w.-]+")
+# Around the lines install.sh owns in the user's crontab (matched by prefix).
+CRON_BEGIN = "# >>> CCyclops"
+CRON_END = "# <<< CCyclops"
 
 
 def env(key: str, default: str = "") -> str:
@@ -111,6 +116,26 @@ def parse_schedule(text: str) -> dict:
     return {"StartCalendarInterval": entries}
 
 
+def cron_times(agent: dict) -> list:
+    """An agent's launchd schedule keys as crontab time fields, one per line it needs."""
+    if agent.get("KeepAlive"):
+        return ["@reboot"]
+    if "StartInterval" in agent:
+        s = agent["StartInterval"]
+        if s % 3600 == 0 and 24 % (s // 3600) == 0:
+            return [f"0 */{s // 3600} * * *"]
+        if s % 60 == 0 and 60 % (s // 60) == 0:
+            return [f"*/{s // 60} * * * *"]
+        raise ValueError("cron (Linux / WSL) can only repeat every N minutes when N divides 60, "
+                         "or every N hours when N divides 24")
+    by_time = {}
+    for e in agent.get("StartCalendarInterval", []):
+        days = by_time.setdefault((e["Minute"], e["Hour"]), [])
+        if "Weekday" in e:
+            days.append(e["Weekday"])
+    return [f"{m} {h} * * {','.join(map(str, sorted(days))) or '*'}" for (m, h), days in by_time.items()]
+
+
 # ------------------------------------------------------------------------ check
 
 def check(commands_dir: str, hooks_dir: str) -> int:
@@ -123,7 +148,9 @@ def check(commands_dir: str, hooks_dir: str) -> int:
         mode = job_mode(name)
         if mode not in ("manual", "off"):
             try:
-                parse_schedule(mode)
+                schedule = parse_schedule(mode)
+                if env("SCHEDULER") == "cron":
+                    cron_times(schedule)
             except ValueError as e:
                 errors.append(f"{flag_key('JOB', name)}: {e}")
     for prefix, names, folder in (("JOB", commands, "commands/"), ("HOOK", hooks, "hooks/")):
@@ -152,8 +179,10 @@ def check(commands_dir: str, hooks_dir: str) -> int:
     if not Path(env("PROJECTS_DIR")).is_dir():
         warnings.append(f"PROJECTS_DIR={env('PROJECTS_DIR')} doesn't exist — the commit feed reports an error until it does")
     if env("CALENDAR") == "true" and not shutil.which("icalBuddy"):
+        fix = ("set CALENDAR=false (icalBuddy is macOS-only)" if env("SCHEDULER") == "cron"
+               else "brew install ical-buddy, or set CALENDAR=false")
         warnings.append("CALENDAR=true but icalBuddy isn't installed — standup/wrapdown will refuse "
-                        "to write (FEED FAILURE). brew install ical-buddy, or set CALENDAR=false")
+                        f"to write (FEED FAILURE). {fix}")
 
     used = set()
     for p in Path(commands_dir).glob("*.md"):
@@ -209,6 +238,31 @@ def dashboard_plist(dst: str):
                 {"RunAtLoad": True, "KeepAlive": True})
 
 
+def crontab(agents_dir: str):
+    kept, ours = [], False
+    for line in sys.stdin.read().splitlines():
+        if line.startswith(CRON_BEGIN):
+            ours = True
+        elif line.startswith(CRON_END):
+            ours = False
+        elif not ours:
+            kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    block = []
+    for p in sorted(Path(agents_dir).glob("*.plist")):
+        agent = plistlib.loads(p.read_bytes())
+        cmd = " ".join(map(shlex.quote, agent["ProgramArguments"]))
+        cmd += f" >> {shlex.quote(agent['StandardOutPath'])} 2>&1"
+        cmd = cmd.replace("%", "\\%")  # a bare % ends the command in a crontab
+        block.append(f"# {agent['Label']}")
+        block += [f"{t} {cmd}" for t in cron_times(agent)]
+    if block:
+        kept += ([""] if kept else []) + [f"{CRON_BEGIN} — written by install.sh, edits in here are overwritten >>>",
+                                          *block, f"{CRON_END} <<<"]
+    sys.stdout.write("".join(line + "\n" for line in kept))
+
+
 def resolved(dst: str):
     lines = [f"# Generated by install.sh from {env('CCYCLOPS_CONFIG')}",
              "# Don't edit this copy: change that file, then run install.sh again.", ""]
@@ -253,6 +307,8 @@ def main():
             job_plist(*args)
         elif cmd == "dashboard-plist":
             dashboard_plist(*args)
+        elif cmd == "crontab":
+            crontab(*args)
         elif cmd == "resolved":
             resolved(*args)
         elif cmd == "write-config":

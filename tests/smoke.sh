@@ -1,15 +1,19 @@
 #!/bin/bash
 # End-to-end check of install.sh, run-job.sh and the hooks in a throwaway
-# $HOME (with a space in it). claude, gh, launchctl and osascript are fakes;
-# jq, python3 and git are real. Never touches your ~/.claude or launchd.
+# $HOME (with a space in it). claude, gh, launchctl, crontab and osascript are
+# fakes; jq, python3 and git are real. Never touches your ~/.claude, launchd or
+# crontab. Runs on macOS and Linux: the launchd path first (against the fake
+# launchctl), then the cron path that Linux and WSL2 installs take.
 #
 #   bash tests/smoke.sh
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 SANDBOX="$(mktemp -d)"
-trap 'rm -rf "$SANDBOX"' EXIT
 export SANDBOX HOME="$SANDBOX/home dir" CCYCLOPS_NONINTERACTIVE=1 CCYCLOPS_CONFIG="$SANDBOX/config.sh"
+export CCYCLOPS_SCHEDULER=launchd
+# The cron path starts a real dashboard server out of the sandbox.
+trap 'pkill -f "$HOME/.claude/scripts/workflows-dashboard.py" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
 FAKE="$SANDBOX/bin"
 export PATH="$FAKE:$PATH"
 mkdir -p "$HOME" "$FAKE"
@@ -20,7 +24,7 @@ check() { local what="$1"; shift; if "$@" >/dev/null; then ok "$what"; else prin
 install() { "$REPO/install.sh" "$@" </dev/null >"$SANDBOX/out" 2>&1; }
 install_ok() { install "$@" || { cat "$SANDBOX/out"; echo "install.sh $* failed" >&2; exit 1; }; }
 output_has() { grep -q -- "$1" "$SANDBOX/out"; }
-snapshot() { find "$HOME" -type f -exec md5 -q {} + 2>/dev/null | sort | md5 -q; }
+snapshot() { find "$HOME" -type f -exec cksum {} + 2>/dev/null | sort | cksum; }
 label() { python3 -c 'import plistlib, sys; print(plistlib.load(open(sys.argv[1], "rb"))["Label"])' "$1"; }
 
 # ------------------------------------------------------------------- fakes
@@ -52,6 +56,16 @@ cat > "$FAKE/gh" <<'EOF'
 echo "$*" >> "$SANDBOX/gh.log"
 if [ -n "${FAKE_GH_FAIL:-}" ]; then echo "gh: Bad credentials (HTTP 401)" >&2; exit 1; fi
 exit 0
+EOF
+cat > "$FAKE/crontab" <<'EOF'
+#!/bin/bash
+# Keeps the "crontab" in a file: -l prints it, - replaces it from stdin.
+f="$SANDBOX/crontab"
+case "${1:-}" in
+  -l) if [ -f "$f" ]; then cat "$f"; else echo "no crontab for $(whoami)" >&2; exit 1; fi ;;
+  -)  cat > "$f" ;;
+  *)  echo "fake crontab: unexpected $*" >&2; exit 1 ;;
+esac
 EOF
 printf '#!/bin/bash\nexit 0\n' > "$FAKE/osascript"
 chmod +x "$FAKE"/*
@@ -107,7 +121,7 @@ import plistlib, sys; assert plistlib.load(open(sys.argv[1], "rb"))["StartCalend
   "$HOME/Library/LaunchAgents/com.$(whoami).claude-weekly.plist"
 check "manual commands get no agent" test ! -e "$HOME/Library/LaunchAgents/com.$(whoami).claude-catchup.plist"
 for p in "$HOME"/Library/LaunchAgents/*.plist; do
-  check "valid plist: $(basename "$p")" plutil -lint -s "$p"
+  check "valid plist: $(basename "$p")" python3 -c 'import plistlib, sys; plistlib.load(open(sys.argv[1], "rb"))' "$p"
 done
 check "loads the 4 jobs + dashboard" test "$(sort "$SANDBOX/loaded" | tr '\n' ' ')" = \
   "$(for n in pr-queue standup weekly workflows wrapdown; do printf 'com.%s.claude-%s ' "$(whoami)" "$n"; done)"
@@ -233,5 +247,38 @@ check "removes commands, hooks, scripts and config" bash -c \
 check "removes every agent" bash -c '[ -z "$(ls "$1" 2>/dev/null)" ] && [ ! -s "$2" ]' _ "$HOME/Library/LaunchAgents" "$SANDBOX/loaded"
 check "leaves only the user's own hook" jq -e '.model == "opus" and ([.hooks[][].hooks[].command] == ["/usr/local/bin/my-hook"])' "$C/settings.json"
 check "keeps notes and quotes" test -f "$T/1234.md" -a -f "$C/scripts/workflows-quotes.json"
+
+echo "cron instead of launchd (Linux, WSL2 on Windows)"
+export CCYCLOPS_SCHEDULER=cron
+PORT=18787 URL="http://127.0.0.1:18787"
+up() { for _ in 1 2 3 4 5 6 7 8 9 10; do curl -sf -m 2 -o /dev/null "$URL" && return 0; sleep 0.5; done; return 1; }
+cron_has() { grep -qF -- "$1" "$SANDBOX/crontab"; }
+echo '0 3 * * * /usr/local/bin/my-backup' > "$SANDBOX/crontab"
+printf '%s\n' 'JOB_WEEKLY="every 2h"' 'DASHBOARD=true' "DASHBOARD_PORT=$PORT" >> "$CCYCLOPS_CONFIG"
+calls=$(wc -l < "$SANDBOX/launchctl.log")
+install_ok
+check "pr-queue is two crontab lines, quoted for the space in \$HOME" \
+  cron_has "40 8 * * 1,2,3,4,5 /bin/bash '$C/scripts/run-job.sh' pr-queue >> '$C/logs/pr-queue-launchd.log' 2>&1"
+check "(the 13:00 one)" cron_has "0 13 * * 1,2,3,4,5 /bin/bash '$C/scripts/run-job.sh' pr-queue"
+check "every 2h" cron_has "0 */2 * * * /bin/bash '$C/scripts/run-job.sh' weekly"
+check "the dashboard starts at boot" bash -c 'grep -q "^@reboot .*workflows-dashboard.py. --no-open --port $2 " "$1"' _ "$SANDBOX/crontab" "$PORT"
+check "off and manual jobs get no line" bash -c '! grep -qE "wrapdown|catchup" "$1"' _ "$SANDBOX/crontab"
+check "keeps the user's own crontab line" test "$(head -1 "$SANDBOX/crontab")" = '0 3 * * * /usr/local/bin/my-backup'
+check "never calls launchctl, writes no LaunchAgents, builds no app" bash -c \
+  '[ "$(wc -l < "$SANDBOX/launchctl.log")" -eq "$1" ] && [ -z "$(ls "$HOME/Library/LaunchAgents")" ] && [ ! -e "$HOME/Applications/CCyclops.app" ]' _ "$calls"
+check "starts the dashboard" up
+curl -sf -m 5 "$URL" > "$SANDBOX/dash.html"
+check "which lists the cron jobs as loaded" bash -c \
+  'grep -q "Weekdays 08:40 · Weekdays 13:00" "$1" && grep -q "every 2h" "$1" && ! grep -q "NOT LOADED" "$1"' _ "$SANDBOX/dash.html"
+cp "$SANDBOX/crontab" "$SANDBOX/crontab.before"
+install_ok
+check "a re-run leaves the crontab alone" cmp -s "$SANDBOX/crontab" "$SANDBOX/crontab.before"
+check "and the dashboard is back up" up
+echo 'JOB_WEEKLY="every 45m"' >> "$CCYCLOPS_CONFIG"
+rc=0; install || rc=$?
+check "an interval cron can't express is refused" bash -c '[ "$1" = 1 ] && grep -q "JOB_WEEKLY: cron (Linux / WSL) can only repeat" "$2"' _ "$rc" "$SANDBOX/out"
+install_ok --uninstall --yes
+check "uninstall leaves only the user's own crontab line" test "$(cat "$SANDBOX/crontab")" = '0 3 * * * /usr/local/bin/my-backup'
+check "and stops the dashboard" bash -c '! curl -sf -m 2 -o /dev/null "$1"' _ "$URL"
 
 echo "all $passed checks passed"

@@ -1,5 +1,6 @@
 #!/bin/bash
-# CCyclops installer — applies config.sh to this Mac.
+# CCyclops installer — applies config.sh to this Mac, or to Linux / WSL2 on
+# Windows, where cron stands in for launchd.
 #
 #   ./install.sh                install or update from config.sh (the first run
 #                               asks a few questions and writes config.sh)
@@ -19,7 +20,6 @@ CONFIG="${CCYCLOPS_CONFIG:-$REPO_DIR/config.sh}"
 HELPER="$REPO_DIR/tools/ccyclops.py"
 CLAUDE_DIR="$HOME/.claude"
 INSTALLED_CONFIG="$CLAUDE_DIR/ccyclops/config.sh"
-AGENTS="$HOME/Library/LaunchAgents"
 APP="$HOME/Applications/CCyclops.app"
 LAUNCHER="$HOME/.local/bin/ccyclops"
 GUI="gui/$(id -u)"
@@ -34,7 +34,7 @@ for arg in "$@"; do
     --reconfigure) MODE=reconfigure ;;
     --uninstall) MODE=uninstall ;;
     --yes) YES=1 ;;
-    -h|--help) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (see ./install.sh --help)" >&2; exit 1 ;;
   esac
 done
@@ -71,11 +71,29 @@ remove() {  # remove <path>... — delete things this installer owns, reporting 
   done
 }
 
-# ----------------------------------------------------------------------- launchd
+# ---------------------------------------------------------------- launchd / cron
+# Without launchd (Linux, WSL2) the same agent plists are kept in ~/.claude and
+# sync_cron turns them into crontab lines; the dashboard reads them either way.
+case "$(uname -s)" in
+  Darwin) SCHEDULER=launchd ;;
+  Linux)  SCHEDULER=cron ;;
+  *) echo "CCyclops needs macOS or Linux — on Windows, run it inside WSL2 (see the README)." >&2; exit 1 ;;
+esac
+SCHEDULER="${CCYCLOPS_SCHEDULER:-$SCHEDULER}"  # tests force one or the other
+export SCHEDULER
+if [ "$SCHEDULER" = launchd ]; then
+  AGENTS="$HOME/Library/LaunchAgents" PKG="brew install"
+else
+  AGENTS="$CLAUDE_DIR/ccyclops/agents" PKG="sudo apt install"
+fi
+CRON_DIRTY=0
+DASHBOARD_PROC="$CLAUDE_DIR/scripts/workflows-dashboard.py --no-open"  # as pkill -f sees it
+
 label()       { printf '%s.claude-%s' "$LAUNCHD_PREFIX" "$1"; }
 agent_plist() { printf '%s/%s.plist' "$AGENTS" "$(label "$1")"; }
 is_loaded()   { launchctl print "$GUI/$(label "$1")" >/dev/null 2>&1; }
 load_agent() {  # (re)load when its plist just changed or it isn't loaded
+  if [ "$SCHEDULER" = cron ]; then CRON_DIRTY=$((CRON_DIRTY | CHANGED)); return 0; fi
   if [ "$CHANGED" = 0 ] && is_loaded "$1"; then return 0; fi
   if [ "$DRY" = 1 ]; then echo "  [dry] load $(label "$1")"; return 0; fi
   launchctl bootout "$GUI/$(label "$1")" 2>/dev/null || true
@@ -83,8 +101,33 @@ load_agent() {  # (re)load when its plist just changed or it isn't loaded
 }
 unload_agent() {
   [ -f "$(agent_plist "$1")" ] || return 0
-  [ "$DRY" = 1 ] || launchctl bootout "$GUI/$(label "$1")" 2>/dev/null || true
+  if [ "$SCHEDULER" = cron ]; then
+    CRON_DIRTY=1
+  elif [ "$DRY" = 0 ]; then
+    launchctl bootout "$GUI/$(label "$1")" 2>/dev/null || true
+  fi
   remove "$(agent_plist "$1")"
+}
+sync_cron() {  # make the CCyclops block of the crontab match the agents; the rest is left alone
+  [ "$SCHEDULER" = cron ] || return 0
+  if [ "$DRY" = 1 ]; then
+    [ "$CRON_DIRTY" = 0 ] || echo "  [dry] update the CCyclops lines in your crontab"
+    return 0
+  fi
+  local cur new
+  cur=$(crontab -l 2>/dev/null || true)
+  new=$(printf '%s\n' "$cur" | helper crontab "$AGENTS")
+  [ "$cur" != "$new" ] || return 0
+  printf '%s\n' "$new" | crontab -
+  echo "  updated the CCyclops lines in your crontab"
+}
+stop_dashboard() {  # cron only: launchd stops and restarts its own agent
+  pkill -f "$DASHBOARD_PROC" 2>/dev/null || return 0
+  for _ in 1 2 3 4 5 6 7 8 9 10; do pgrep -f "$DASHBOARD_PROC" >/dev/null || break; sleep 0.3; done
+}
+start_dashboard() {
+  nohup "$PYTHON3" "$CLAUDE_DIR/scripts/workflows-dashboard.py" --no-open --port "$DASHBOARD_PORT" \
+    >>"$CLAUDE_DIR/logs/workflows-launchd.log" 2>&1 </dev/null &
 }
 
 legacy_paths() {  # what earlier layouts left behind, one path per line
@@ -161,7 +204,11 @@ configure() {  # the setup questions; answers go into config.sh
     ask SKIP_MEETING "Recurring meeting to leave out of notes"
   else
     CALENDAR=false
-    echo "  icalBuddy isn't installed, so CALENDAR=false (brew install ical-buddy, then set it to true)"
+    if [ "$SCHEDULER" = launchd ]; then
+      echo "  icalBuddy isn't installed, so CALENDAR=false (brew install ical-buddy, then set it to true)"
+    else
+      echo "  The calendar feed needs icalBuddy, which is macOS-only, so CALENDAR=false"
+    fi
   fi
   ask LANGUAGE "Language the notes are written in"
   if [ "$DRY" = 1 ]; then echo "  [dry] write $(pretty "$CONFIG")"; return 0; fi
@@ -169,9 +216,9 @@ configure() {  # the setup questions; answers go into config.sh
   echo "  wrote $(pretty "$CONFIG")"
 }
 
-[ "$(uname -s)" = Darwin ] || { echo "CCyclops needs macOS (it schedules jobs with launchd)." >&2; exit 1; }
-command -v jq >/dev/null || { echo "MISSING: jq (brew install jq)" >&2; exit 1; }
-command -v python3 >/dev/null || { echo "MISSING: python3 (brew install python3)" >&2; exit 1; }
+command -v jq >/dev/null || { echo "MISSING: jq ($PKG jq)" >&2; exit 1; }
+command -v python3 >/dev/null || { echo "MISSING: python3 ($PKG python3)" >&2; exit 1; }
+[ "$SCHEDULER" = launchd ] || command -v crontab >/dev/null || { echo "MISSING: crontab ($PKG cron)" >&2; exit 1; }
 export CCYCLOPS_EXAMPLE="$EXAMPLE" CCYCLOPS_CONFIG="$CONFIG"
 
 # --------------------------------------------------------------------- uninstall
@@ -179,16 +226,18 @@ if [ "$MODE" = uninstall ]; then
   # What is installed wins over config.sh, which may have changed since.
   if [ -f "$INSTALLED_CONFIG" ]; then load_config "$INSTALLED_CONFIG"; else load_config; fi
   if [ "$DRY" = 0 ] && [ "$YES" = 0 ] && [ "$HAVE_TTY" = 1 ]; then
-    printf 'Remove CCyclops from this Mac? Notes, logs and quotes stay. [y/N]: ' >&2
+    printf 'Remove CCyclops from this machine? Notes, logs and quotes stay. [y/N]: ' >&2
     read -r yn </dev/tty || yn=""
     case "$yn" in y|Y|yes) ;; *) echo "Nothing removed."; exit 0 ;; esac
   fi
-  say "Removing launchd agents, commands and the app"
+  say "Removing scheduled jobs, commands and the dashboard"
   for f in "$REPO_DIR"/commands/*.md; do
     unload_agent "$(basename "$f" .md)"
     remove "$CLAUDE_DIR/commands/$(basename "$f")"
   done
   unload_agent workflows
+  [ "$SCHEDULER" = launchd ] || [ "$DRY" = 1 ] || stop_dashboard
+  sync_cron
   remove "$APP" "$LAUNCHER"
   say "Unregistering session hooks"
   sync_hooks "[]"
@@ -212,6 +261,9 @@ done
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' || { echo "  MISSING: python3 >= 3.10"; missing=1; }
 [ "$missing" = 0 ] || { echo "Install the missing dependencies first (see README)."; exit 1; }
 gh auth status >/dev/null 2>&1 || warn "gh is not authenticated — run 'gh auth login' before the first scheduled run"
+if [ "$SCHEDULER" = cron ] && ! pgrep -x cron >/dev/null && ! pgrep -x crond >/dev/null; then
+  warn "cron isn't running, so nothing will be scheduled — start it with 'sudo service cron start' (WSL: see the README)"
+fi
 
 # ------------------------------------------------------------------------ config
 load_config
@@ -270,7 +322,7 @@ for f in "$REPO_DIR"/hooks/*.sh; do
 done
 sync_hooks "$enabled"
 
-say "Commands and jobs -> ~/.claude/commands/, ~/Library/LaunchAgents/"
+say "Commands and jobs -> ~/.claude/commands/, $([ "$SCHEDULER" = cron ] && echo "your crontab" || pretty "$AGENTS/")"
 summary=""
 for f in "$REPO_DIR"/commands/*.md; do
   name=$(basename "$f" .md)
@@ -292,7 +344,15 @@ for f in "$REPO_DIR"/commands/*.md; do
   summary="$summary$(printf '  %-12s %s' "$name" "$mode")"$'\n'
 done
 
-if [ "$DASHBOARD" = true ]; then
+if [ "$DASHBOARD" = true ] && [ "$SCHEDULER" = cron ]; then
+  say "Dashboard -> ~/.local/bin/ccyclops"
+  copy "$REPO_DIR/bin/ccyclops" "$LAUNCHER" 755
+  t=$(mktemp); helper dashboard-plist "$t"; put "$t" "$(agent_plist workflows)"
+  load_agent workflows
+  # cron only starts it at boot: restart it now, on the code just installed.
+  if [ "$DRY" = 1 ]; then echo "  [dry] restart the dashboard"; else stop_dashboard; start_dashboard; fi
+  summary="$summary$(printf '  %-12s http://127.0.0.1:%s  (open it: ccyclops)' dashboard "$DASHBOARD_PORT")"$'\n'
+elif [ "$DASHBOARD" = true ]; then
   say "Dashboard -> ~/Applications/CCyclops.app, ~/.local/bin/ccyclops"
   copy "$REPO_DIR/bin/ccyclops" "$LAUNCHER" 755
   render "$REPO_DIR/app/Info.plist" "$APP/Contents/Info.plist"
@@ -309,8 +369,10 @@ if [ "$DASHBOARD" = true ]; then
 else
   say "Dashboard off — removing it"
   unload_agent workflows
+  [ "$SCHEDULER" = launchd ] || [ "$DRY" = 1 ] || stop_dashboard
   remove "$APP" "$LAUNCHER"
 fi
+sync_cron
 
 legacy=$(legacy_paths)
 if [ -n "$legacy" ]; then
@@ -326,7 +388,15 @@ cat <<EOF
 Change anything: edit $(pretty "$CONFIG"), then run ./install.sh again.
 Run a job now:   bash ~/.claude/scripts/run-job.sh standup
 EOF
-if [ "$FIRST_RUN" = 1 ]; then
+if [ "$FIRST_RUN" = 1 ] && [ "$SCHEDULER" = cron ]; then
+  cat <<EOF
+
+First-time setup:
+  1. gh auth login       (if the dependency check warned about it)
+  2. Jobs only run while cron does. On WSL2 that means the distro has to be
+     up at the scheduled time — see "Windows (WSL2)" in the README.
+EOF
+elif [ "$FIRST_RUN" = 1 ]; then
   cat <<EOF
 
 First-time setup:

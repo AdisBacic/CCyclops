@@ -8,6 +8,7 @@
 
 [![CI](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml/badge.svg)](https://github.com/AdisBacic/CCyclops/actions/workflows/ci.yml)
 ![macOS](https://img.shields.io/badge/macOS-launchd-black?logo=apple)
+![Windows](https://img.shields.io/badge/Windows-WSL2%20%2B%20cron-0078D4)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-headless-d97757)
 ![Python](https://img.shields.io/badge/Python-3.10%2B%20stdlib%20only-3776AB?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -36,7 +37,7 @@ flowchart LR
     subgraph feeds [deterministic shell feeds]
         G[git log] & C[icalBuddy calendar] & P[gh PR lists] & T[ticket notes]
     end
-    subgraph jobs [launchd, weekdays]
+    subgraph jobs [launchd or cron, weekdays]
         Q[08:40 pr-queue] --> S[09:00 standup] --> W[17:30 wrapdown]
     end
     feeds --> jobs
@@ -71,17 +72,21 @@ Guest checkout design review with Priya and Lea
 
 | Dependency | Why | Install |
 |---|---|---|
-| macOS | `launchd` scheduling, notifications | — |
+| macOS, or Windows with [WSL2](https://learn.microsoft.com/windows/wsl/install) | scheduling: `launchd` on macOS, `cron` inside WSL2 | — |
 | [Claude Code](https://claude.com/claude-code) | the agent (`claude -p` headless) | the native installer or `npm i -g @anthropic-ai/claude-code`, then log in once |
 | [gh](https://cli.github.com) | PR/issue feeds | `brew install gh && gh auth login` |
 | `jq` | JSON parsing in the runner & hooks | `brew install jq` |
 | Python ≥ 3.10 | the installer helper and the dashboard (stdlib only, zero pip installs) | `brew install python3` |
-| [icalBuddy](https://hasseg.org/icalBuddy/) *(optional)* | meeting feeds — or set `CALENDAR=false` | `brew install ical-buddy` |
-| Google Chrome *(optional)* | the chromeless app window | falls back to your default browser |
+| [icalBuddy](https://hasseg.org/icalBuddy/) *(optional, macOS only)* | meeting feeds — or set `CALENDAR=false` | `brew install ical-buddy` |
+| Google Chrome *(optional, macOS only)* | the chromeless app window | falls back to your default browser |
+
+On Windows everything in this table lives **inside WSL2** and comes from `apt` — see [Windows (WSL2)](#windows-wsl2).
 
 Cost: each job is one headless Claude session with a `--max-turns` cap. Typical day: standup ~$0.80, wrapdown ~$0.60, pr-queue ~$1–4 depending on how many PRs are new (unchanged PRs are skipped). On a Claude subscription these draw from your usage window instead of billing per token.
 
 ## Install
+
+### macOS
 
 ```bash
 git clone https://github.com/AdisBacic/CCyclops.git
@@ -90,6 +95,46 @@ cd CCyclops
 ```
 
 The installer copies everything into `~/.claude/`, registers the session hooks in `settings.json` (merging, never clobbering), builds the app bundle, and loads the launchd agents.
+
+### Windows (WSL2)
+
+CCyclops is bash all the way down, so on Windows it runs inside WSL2, with `cron` doing launchd's job. Everything below is typed in the WSL terminal, not PowerShell — except step 1.
+
+1. **Get WSL2** — in PowerShell: `wsl --install` (Ubuntu 22.04 or newer; reboot if it asks).
+2. **Install the tools inside WSL** — including Claude Code itself, even if you already have it on Windows:
+
+   ```bash
+   sudo apt update && sudo apt install -y git gh jq python3 cron curl
+   curl -fsSL https://claude.ai/install.sh | bash    # Claude Code — then run `claude` once to log in
+   gh auth login
+   ```
+
+3. **Install CCyclops** — same as on a Mac:
+
+   ```bash
+   git clone https://github.com/AdisBacic/CCyclops.git
+   cd CCyclops
+   ./install.sh
+   ```
+
+   The installer sees it isn't on macOS and writes the scheduled jobs into your crontab (between two `CCyclops` marker lines — your own entries are left alone) instead of loading launchd agents.
+
+4. **Keep it running.** Scheduled jobs fire only while WSL is up, and Windows shuts WSL down a little after its last terminal closes. Two things to check:
+   - *cron is running:* `pgrep cron` prints a number. If not, `sudo service cron start` — and to have it start by itself, make sure `/etc/wsl.conf` has `[boot]` / `systemd=true` (the default on new installs), then `wsl --shutdown` once from PowerShell.
+   - *WSL is up at job time:* leave a WSL terminal open during the day, or let Windows start one at logon — in PowerShell: `schtasks /Create /TN "WSL keep-alive" /SC ONLOGON /TR "wsl.exe --exec sleep infinity"`.
+
+What's different from the Mac:
+
+| | On Windows (WSL2) |
+|---|---|
+| Dashboard | `ccyclops` opens `http://localhost:8787` in your Windows browser. No Dock/Spotlight app. |
+| Notes | For Obsidian on Windows, put the vault on the Windows side: `VAULT="/mnt/c/Users/<you>/Documents/Notes"`. |
+| Session hooks | They fire for Claude Code sessions started **inside WSL** — keep your repos (`PROJECTS_DIR`) and your Claude Code work there. |
+| Calendar | No meeting feed (icalBuddy is macOS-only): the installer sets `CALENDAR=false`. |
+| Notifications | None — a failed job shows as the red banner on the dashboard. `HOOK_SESSION_END_CHECK` only speaks through notifications, so set it to `false`. |
+| Schedules | A job that was due while WSL was down is skipped, not caught up. `every Nm` needs N to divide 60, `every Nh` N to divide 24. |
+
+Plain Linux works the same way, minus the Windows browser.
 
 > **The lazy path:** clone the repo and tell Claude Code *"read this repo and set it up for me"*. The prompts, scripts, and this README are all the context it needs — it can also adapt any part to your workflow while it's at it (different times, another ticket system, no calendar…).
 
@@ -153,7 +198,7 @@ Write release notes for these PRs to `{{VAULT}}/Workflows/Releases/<today>.md` �
 
 (Injected `` !`…` `` lines can't use `$`-expansions — put anything fancier in a script, like `scripts/pr-feed.sh`.)
 
-…add `JOB_RELEASE_NOTES="fri 15:00"` to `config.sh`, and run `./install.sh`. It becomes `/release-notes`, a launchd agent, and a card on the dashboard (described by its own frontmatter).
+…add `JOB_RELEASE_NOTES="fri 15:00"` to `config.sh`, and run `./install.sh`. It becomes `/release-notes`, a launchd agent (a crontab line on Windows), and a card on the dashboard (described by its own frontmatter).
 
 | Frontmatter | Meaning |
 |---|---|
@@ -207,14 +252,14 @@ These are the load-bearing decisions — keep them when you fork:
 ./install.sh --uninstall
 ```
 
-Removes the launchd agents, app, commands, hooks (unregistered from `settings.json`, leaving your other hooks alone) and scripts. Left in place on purpose: your notes in `<vault>/Workflows/`, your quotes and favicon, the run logs (`~/.claude/logs/*-cron.log`, `*-launchd.log`), and the calendar cache. Delete them by hand for a clean slate. If you added the Dock icon, drag it out of the Dock.
+Removes the launchd agents (on Windows: the CCyclops lines in your crontab), app, commands, hooks (unregistered from `settings.json`, leaving your other hooks alone) and scripts. Left in place on purpose: your notes in `<vault>/Workflows/`, your quotes and favicon, the run logs (`~/.claude/logs/*-cron.log`, `*-launchd.log`), and the calendar cache. Delete them by hand for a clean slate. If you added the Dock icon, drag it out of the Dock.
 
 ## Troubleshooting
 
 <details>
 <summary><b>A job failed — where do I look?</b></summary>
 
-The dashboard shows a red banner for failures in the last 7 days (dismissable with ×), and you get a macOS notification. Details: `tail -50 ~/.claude/logs/<job>-cron.log`, or re-run it and watch: `bash ~/.claude/scripts/run-job.sh <job>`. Exit codes: `1` claude error · `2` feed failure · `3` pre-flight failed (usually `gh auth login` needed) · `124` watchdog kill.
+The dashboard shows a red banner for failures in the last 7 days (dismissable with ×), and on macOS you get a notification. Details: `tail -50 ~/.claude/logs/<job>-cron.log`, or re-run it and watch: `bash ~/.claude/scripts/run-job.sh <job>`. Exit codes: `1` claude error · `2` feed failure · `3` pre-flight failed (usually `gh auth login` needed) · `124` watchdog kill.
 </details>
 
 <details>
@@ -235,9 +280,15 @@ On a Claude subscription, the rolling usage window can starve scheduled jobs. Th
 `launchd` fires a missed `StartCalendarInterval` once on wake (not if powered off). If your Mac sleeps through 09:00, the standup runs when you open the lid.
 </details>
 
+<details>
+<summary><b>Windows: jobs never run</b></summary>
+
+Almost always WSL wasn't running at the scheduled time, or cron isn't running inside it — see step 4 of [Windows (WSL2)](#windows-wsl2). `crontab -l` shows the installed schedule; `bash ~/.claude/scripts/run-job.sh standup` tells you whether the job itself works. A missed run is not caught up: start it by hand.
+</details>
+
 ## Development
 
-`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`, runs jobs and hooks, flips settings, and uninstalls — 70-odd checks, nothing touches your real setup. CI runs it on macOS, plus shellcheck.
+`bash tests/smoke.sh` installs into a throwaway `$HOME` with fake `claude`/`gh`/`launchctl`/`crontab`, runs jobs and hooks, flips settings, and uninstalls — once the launchd way, once the cron way — 90-odd checks, nothing touches your real setup. CI runs it on macOS and on Ubuntu (standing in for WSL2), plus shellcheck.
 
 ## License
 

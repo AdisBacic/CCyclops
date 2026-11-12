@@ -1,7 +1,7 @@
 #!/bin/bash
-# Live dashboard of local Claude automations (launchd agents, logs, hooks).
+# Live dashboard of local Claude automations (scheduled jobs, logs, hooks).
 #   ccyclops             open the dashboard as a chromeless app window
-#                        (starts/kickstarts the launchd server if it's down)
+#                        (starts the server first if it's down)
 #   ccyclops --dump      print the HTML once to stdout
 #   ccyclops --port N    serve manually on another port (see --help)
 # shellcheck source=/dev/null
@@ -10,11 +10,25 @@ URL="http://127.0.0.1:${DASHBOARD_PORT:-8787}"
 
 if [ $# -eq 0 ]; then
   if ! curl -sf -m 2 -o /dev/null "$URL"; then
-    launchctl kickstart "gui/$(id -u)/${LAUNCHD_PREFIX:-com.$(whoami)}.claude-workflows" 2>/dev/null
+    if [ "${SCHEDULER:-launchd}" = launchd ]; then
+      launchctl kickstart "gui/$(id -u)/${LAUNCHD_PREFIX:-com.$(whoami)}.claude-workflows" 2>/dev/null
+    else  # cron only starts it at boot
+      nohup "${PYTHON3:-python3}" "$HOME/.claude/scripts/workflows-dashboard.py" --no-open \
+        >>"$HOME/.claude/logs/workflows-launchd.log" 2>&1 </dev/null &
+    fi
     for _ in 1 2 3 4 5; do
       curl -sf -m 2 -o /dev/null "$URL" && break
       sleep 1
     done
+  fi
+  if [ "$(uname -s)" != Darwin ]; then
+    # WSL: hand the URL to Windows — localhost there reaches the server in here.
+    if command -v wslview >/dev/null; then wslview "$URL"
+    elif command -v explorer.exe >/dev/null; then explorer.exe "$URL"  # exits 1 even when it worked
+    elif command -v xdg-open >/dev/null; then xdg-open "$URL" >/dev/null 2>&1
+    fi
+    echo "CCyclops dashboard → $URL"
+    exit 0
   fi
   if [ -d "/Applications/Google Chrome.app" ]; then
     exec open -na "Google Chrome" --args --app="$URL"

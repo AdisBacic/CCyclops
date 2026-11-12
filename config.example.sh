@@ -24,8 +24,8 @@ JOB_WEEKLY="manual"                       # fold the week's dailies into one not
 JOB_CATCHUP="manual"                      # re-orient on the current feature branch
 
 # ── Features (true / false) ──────────────────────────────────────────────────
-DASHBOARD=true                 # always-on dashboard + CCyclops Dock/Spotlight app
-CALENDAR=true                  # meeting feeds from icalBuddy (brew install ical-buddy)
+DASHBOARD=true                 # always-on dashboard (+ the CCyclops Dock/Spotlight app on macOS)
+CALENDAR=true                  # meeting feeds from icalBuddy (brew install ical-buddy; macOS only)
 NOTIFICATIONS=true             # macOS notification when a scheduled job fails
 # Session hooks — one line per file in hooks/ (HOOK_<FILE NAME>).
 HOOK_TICKET_CONTEXT=true       # session start: load the ticket note for this branch
@@ -52,5 +52,5 @@ MODEL=""                       # model for scheduled jobs, e.g. "sonnet" ("" = y
                                # a command's own model: line wins)
 WATCHDOG_MINUTES=15            # kill a job that runs longer than this
 DASHBOARD_PORT=8787
-LAUNCHD_PREFIX="com.$(whoami)" # launchd labels become <prefix>.claude-<job>
+LAUNCHD_PREFIX="com.$(whoami)" # job labels become <prefix>.claude-<job> (launchd, or your crontab on Linux / WSL)
 CLAUDE_BIN=""                  # path to claude; empty = found automatically at install
