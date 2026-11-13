@@ -5,6 +5,7 @@ Scans on every request (a browser refresh always shows live state):
   * ~/Library/LaunchAgents/*.plist        -> scheduled Claude workflows
       (agents whose label mentions "claude" or whose program touches ~/.claude)
   * launchctl list                        -> loaded state / last exit status
+      (Linux / WSL: the agents are in ~/.claude/ccyclops/agents and run from the crontab)
   * ~/.claude/logs/<name>-cron.log        -> run history (=== ... start === / === exit: N === blocks)
   * ~/.claude/commands/*.md frontmatter   -> descriptions + manual commands
   * ~/.claude/settings.json               -> session hooks
@@ -33,7 +34,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 HOME = Path.home()
-LAUNCH_AGENTS = HOME / "Library" / "LaunchAgents"
 CLAUDE_DIR = HOME / ".claude"
 LOGS_DIR = CLAUDE_DIR / "logs"
 COMMANDS_DIR = CLAUDE_DIR / "commands"
@@ -67,6 +67,9 @@ def load_config() -> dict:
 
 CONFIG = load_config()
 PORT = int(CONFIG.get("DASHBOARD_PORT") or 8787)
+# install.sh schedules with launchd on macOS and cron elsewhere, from the same agent plists.
+CRON = CONFIG.get("SCHEDULER") == "cron"
+LAUNCH_AGENTS = CLAUDE_DIR / "ccyclops" / "agents" if CRON else HOME / "Library" / "LaunchAgents"
 
 # The dashboard's own agent is labelled claude-workflows; show it as what it is.
 DISPLAY_NAMES = {"workflows": "dashboard"}
@@ -74,7 +77,7 @@ DISPLAY_NAMES = {"workflows": "dashboard"}
 # Hand-written descriptions win over anything derived from files.
 DESCRIPTIONS = {
     "workflows": f"This dashboard — serves this page at localhost:{PORT}, always running, "
-                 "listing every Claude automation on this Mac.",
+                 "listing every Claude automation on this machine.",
 }
 
 
@@ -228,6 +231,15 @@ def next_run_text(plist: dict) -> str:
 def launchctl_state() -> dict:
     """label -> (loaded, status_text)"""
     out = {}
+    if CRON:  # install.sh writes "# <label>" above each agent's crontab lines
+        try:
+            res = subprocess.run(["crontab", "-l"], capture_output=True, text=True, timeout=10)
+            for line in res.stdout.splitlines():
+                if line.startswith("# "):
+                    out[line[2:].strip()] = (True, "in crontab")
+        except Exception:
+            pass
+        return out
     try:
         res = subprocess.run(["launchctl", "list"], capture_output=True, text=True, timeout=10)
         for line in res.stdout.splitlines()[1:]:
@@ -739,7 +751,7 @@ def build_html() -> str:
     now = datetime.now()
     return f"""<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CCyclops</title>
+<title>CCyclops - Workflows</title>
 <link rel="icon" href="{favicon_href()}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -748,21 +760,21 @@ def build_html() -> str:
 <div id="quote" aria-hidden="true"></div>
 <div class="wrap">
   <header>
-    <h1>CCyclops<span class="tld">.</span></h1>
+    <h1>CCyclops - Workflows<span class="tld">.</span></h1>
     <div class="meta"><b id="clock">{now:%H:%M:%S}</b> · {now:%a %d %b}<br>
     scanned {now:%H:%M:%S} · auto-refresh 60s</div>
   </header>
   {banner}
   <section><h2>Scheduled</h2>
-    <p class="sub">launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.</p>
-    {"".join(render_workflow(f, models) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
+    <p class="sub">{"cron jobs" if CRON else "launchd agents"} that run Claude (or serve this page) automatically — no session or terminal needed.</p>
+    {"".join(render_workflow(f, models) for f in flows) or '<p class="desc">No scheduled jobs found.</p>'}</section>
   <section class="manual"><h2>Manual commands</h2>
     <p class="sub">slash commands you run yourself inside a Claude Code session — nothing happens until you type them.</p>
     {manual_html or '<p class="desc">None.</p>'}</section>
   <section><h2>Session hooks</h2>
     <p class="sub">scripts Claude Code fires automatically at the start and end of every session (configured in ~/.claude/settings.json).</p>
     <table class="hooks">{hooks_html or '<tr><td colspan="3">None.</td></tr>'}</table></section>
-  <footer>settings: {e(CONFIG.get("CCYCLOPS_CONFIG") or "config.sh in your clone")} — edit it, then run ./install.sh · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
+  <footer>settings: {e(CONFIG.get("CCYCLOPS_CONFIG") or "config.sh in your clone")} — edit it, then run ./install.sh · sources: {"crontab" if CRON else "~/Library/LaunchAgents"} · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
 </div>
 <script>const QUOTES = {json.dumps(load_quotes(), ensure_ascii=False)};</script>
 <script>{JS}</script>

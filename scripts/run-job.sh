@@ -1,8 +1,9 @@
 #!/bin/bash
 # Runs one job headless: pre-flight -> claude (watchdog-guarded) -> JSON parse
 # -> retry once -> local notification on failure -> dashboard log markers.
-# launchd calls it with the job name (install.sh generates the agents from the
-# JOB_* lines in config.sh). Run it yourself to test a job right now:
+# launchd (cron on Linux / WSL) calls it with the job name (install.sh generates
+# the agents from the JOB_* lines in config.sh). Run it yourself to test a job
+# right now:
 #
 #   bash ~/.claude/scripts/run-job.sh standup
 #
@@ -36,7 +37,7 @@ USAGE_LIMIT=0
 
 # shellcheck source=/dev/null
 . "$CONFIG" 2>/dev/null || CONFIG_MISSING=1
-# launchd starts jobs with a bare PATH: add Homebrew (gh, jq, icalBuddy) and
+# launchd and cron start jobs with a bare PATH: add Homebrew (gh, jq, icalBuddy) and
 # claude's own folder, so an npm-installed claude finds its node.
 PATH="$(dirname "${CLAUDE_BIN:-/usr/bin/true}"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
 export PATH
@@ -47,7 +48,7 @@ fm() {  # fm <key> — a single-line value from the command's frontmatter
                  index($0, k ":") == 1 { v = substr($0, length(k) + 2); sub(/^[ \t]+/, "", v); print v; exit }' "$CMD"
 }
 
-notify() {
+notify() {  # macOS only: elsewhere a failure shows on the dashboard and in the log
   [ "${NOTIFICATIONS:-true}" = true ] || return 0
   osascript -e "display notification \"$1\" with title \"CCyclops · ${JOB}\"" >/dev/null 2>&1
 }

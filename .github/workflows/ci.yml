@@ -16,7 +16,10 @@ jobs:
         run: python3 -m py_compile scripts/*.py tools/*.py
 
   smoke:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]  # ubuntu stands in for WSL2
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: install, run jobs and hooks, uninstall — in a throwaway $HOME
