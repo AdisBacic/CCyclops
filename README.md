@@ -305,7 +305,7 @@ Everything the agents write is **plain Markdown in plain folders**:
 | What | How |
 |---|---|
 | **Prompts** (standup voice & format, review rules…) | edit `commands/*.md` in the repo, then `./install.sh` — not the copies in `~/.claude/commands`, the installer replaces those |
-| **Quotes in the rain** | `~/.claude/scripts/workflows-quotes.json` — `{"quotes": ["…", "…"]}`, picked up on next refresh, never overwritten by the installer |
+| **Quotes in the rain** | `~/.claude/scripts/workflows-quotes.json` — `{"quotes": ["…", "…"]}`, picked up on next refresh, never overwritten by the installer. Edit them in place from the dashboard's **✎ edit quotes** panel (bottom-right). |
 | **Dashboard palette** | CSS variables at the top of `scripts/workflows-dashboard.py` (`--bg`, `--ok`, `--err`, …) |
 | **Rain speed / glyphs / fps** | constants at the top of the `JS` block in the same file (`GLYPHS`, `speeds`, the fps cap) |
 | **Page favicon** | replace `~/.claude/scripts/workflows-favicon.png` |

@@ -22,6 +22,7 @@ import argparse
 import base64
 import html
 import json
+import os
 import plistlib
 import re
 import shlex
@@ -390,6 +391,16 @@ def load_quotes() -> list:
         return []
 
 
+def save_quotes(quotes: list):
+    """Persist a cleaned {"quotes": [...]} to QUOTES_FILE, atomically."""
+    clean = [s.strip() for s in quotes if isinstance(s, str) and s.strip()]
+    QUOTES_FILE.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps({"quotes": clean}, ensure_ascii=False, indent=2)
+    tmp = QUOTES_FILE.with_name(QUOTES_FILE.name + ".tmp")
+    tmp.write_text(data + "\n")
+    os.replace(tmp, QUOTES_FILE)
+
+
 def load_dismissed() -> set:
     try:
         return set(json.loads(read_text(DISMISSED_FILE)))
@@ -529,6 +540,41 @@ table.hooks tr:first-child td { border-top: 0; }
 .manual .name { font-size: 14px; } .manual .card { padding: 12px 18px; }
 footer { margin-top: 44px; color: var(--faint); font-size: 11px;
   border-top: 1px solid var(--line); padding-top: 14px; }
+/* ---- quotes editor ---- */
+#editquotes { position: fixed; right: 14px; bottom: 12px; z-index: 5;
+  background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 99px; padding: 4px 12px; font: inherit; font-size: 11.5px;
+  cursor: pointer; opacity: .55; transition: opacity .2s, border-color .2s, color .2s; }
+#editquotes:hover, #editquotes:focus { opacity: 1; border-color: var(--ok);
+  color: var(--ink); outline: none; }
+#qeditor { position: fixed; inset: 0; z-index: 10; display: none;
+  align-items: center; justify-content: center; background: rgba(5, 8, 6, .72); }
+#qeditor.open { display: flex; }
+.qbox { width: min(640px, 92vw); max-height: 86vh; display: flex; flex-direction: column;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 40px #000a; }
+.qbox h2 { padding: 16px 18px 0; }
+.qbox .sub { padding: 0 18px; }
+.qlist { overflow-y: auto; padding: 4px 18px; flex: 1; }
+.qrow { display: flex; gap: 8px; margin: 8px 0; }
+.qrow input { flex: 1; background: var(--panel2); border: 1px solid var(--line);
+  color: var(--ink); border-radius: 6px; padding: 7px 10px; font: inherit; font-size: 12.5px; }
+.qrow input:focus { outline: none; border-color: var(--ok); }
+.qrow .qdel { background: none; border: none; color: #f0b9ae77; font-size: 17px;
+  cursor: pointer; padding: 0 4px; line-height: 1; font-family: inherit; }
+.qrow .qdel:hover { color: #f0b9ae; }
+.qfoot { display: flex; align-items: center; gap: 10px; padding: 12px 18px 16px;
+  border-top: 1px solid var(--line); }
+.qfoot .qmsg { flex: 1; font-size: 12px; color: var(--dim); }
+.qfoot .qmsg.err { color: var(--err); }
+.qbtn { background: var(--chip); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 6px; padding: 6px 14px; font: inherit; font-size: 12px; cursor: pointer; }
+.qbtn:hover, .qbtn:focus { outline: none; border-color: var(--ok); }
+.qbtn.primary { border-color: #2f5a34; background: #16281a; color: #bfe9bc; }
+.qadd { background: none; border: 1px dashed var(--line); color: var(--dim);
+  border-radius: 6px; padding: 7px 10px; width: 100%; margin: 8px 0 4px; font: inherit;
+  font-size: 12px; cursor: pointer; text-align: left; }
+.qadd:hover, .qadd:focus { outline: none; border-color: var(--ok); color: var(--ink); }
 """
 
 JS = """
@@ -637,16 +683,70 @@ async function showQuote(text) {
   qel.textContent = ""; qel.style.opacity = 0;
 }
 (async function quoteLoop() {
-  if (!QUOTES.length) return;
   let prev = -1;
   await sleep(2000);
   for (;;) {
+    while (!QUOTES.length) await sleep(2000);            // nothing to show yet
     let i = (Math.random() * QUOTES.length) | 0;
     if (QUOTES.length > 1 && i === prev) i = (i + 1) % QUOTES.length;
     prev = i;
     await showQuote(QUOTES[i]);
     await sleep(3000);                                   // pause between quotes
   }
+})();
+
+// ---- quotes editor (create / read / update / delete) ----
+(function quotesEditor() {
+  const panel = document.getElementById("qeditor");
+  const list = document.getElementById("qlist");
+  const msg = document.getElementById("qmsg");
+  if (!panel || !list) return;
+
+  function addRow(text = "") {
+    const row = document.createElement("div");
+    row.className = "qrow";
+    const input = document.createElement("input");
+    input.type = "text"; input.value = text; input.placeholder = "Quote text";
+    const del = document.createElement("button");
+    del.type = "button"; del.className = "qdel"; del.textContent = "\\u00d7";
+    del.title = "Delete"; del.setAttribute("aria-label", "Delete quote");
+    del.onclick = () => row.remove();
+    row.append(input, del);
+    list.append(row);
+    return input;
+  }
+  function seed() {
+    list.textContent = "";
+    msg.textContent = ""; msg.className = "qmsg";
+    (QUOTES.length ? QUOTES : [""]).forEach(q => addRow(q));
+  }
+  function open() { seed(); panel.classList.add("open");
+    const f = list.querySelector("input"); if (f) f.focus(); }
+  function close() { panel.classList.remove("open"); }
+
+  async function save() {
+    const quotes = [...list.querySelectorAll("input")]
+      .map(i => i.value.trim()).filter(Boolean);
+    try {
+      const res = await fetch("/quotes", {method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({quotes})});
+      if (!res.ok) throw new Error();
+      QUOTES.splice(0, QUOTES.length, ...quotes);          // live-update the rain
+      close();
+    } catch (e) {
+      msg.textContent = "Could not save — try again."; msg.className = "qmsg err";
+    }
+  }
+
+  document.getElementById("editquotes").onclick = open;
+  document.getElementById("qadd").onclick = () => addRow().focus();
+  document.getElementById("qsave").onclick = save;
+  document.getElementById("qclose").onclick = close;
+  panel.addEventListener("click", ev => { if (ev.target === panel) close(); });
+  document.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && panel.classList.contains("open")) close();
+  });
 })();
 """
 
@@ -764,6 +864,20 @@ def build_html() -> str:
     <table class="hooks">{hooks_html or '<tr><td colspan="3">None.</td></tr>'}</table></section>
   <footer>settings: {e(CONFIG.get("CCYCLOPS_CONFIG") or "config.sh in your clone")} — edit it, then run ./install.sh · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
 </div>
+<button id="editquotes" title="Edit the rotating quotes">✎ edit quotes</button>
+<div id="qeditor" role="dialog" aria-modal="true" aria-label="Edit quotes">
+  <div class="qbox">
+    <h2>Edit quotes</h2>
+    <p class="sub">The rotating quotes decoded into the rain. Edits save to workflows-quotes.json.</p>
+    <div class="qlist" id="qlist"></div>
+    <button class="qadd" id="qadd" type="button">+ Add a quote</button>
+    <div class="qfoot">
+      <span class="qmsg" id="qmsg" role="status"></span>
+      <button class="qbtn" id="qclose" type="button">Close</button>
+      <button class="qbtn primary" id="qsave" type="button">Save</button>
+    </div>
+  </div>
+</div>
 <script>const QUOTES = {json.dumps(load_quotes(), ensure_ascii=False)};</script>
 <script>{JS}</script>
 </body></html>"""
@@ -802,6 +916,21 @@ def serve(port: int, open_browser: bool):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if self.path == "/quotes":
+                # JSON only (same CORS-preflight guard as /model): another web
+                # page can't rewrite your quotes through this localhost server
+                try:
+                    assert self.headers.get("Content-Type", "").startswith("application/json")
+                    req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    quotes = req["quotes"]
+                    assert isinstance(quotes, list)
+                    save_quotes(quotes)
+                except Exception:
+                    self.send_error(400)
+                    return
+                self.send_response(204)
+                self.end_headers()
                 return
             if self.path != "/dismiss":
                 self.send_error(404)
