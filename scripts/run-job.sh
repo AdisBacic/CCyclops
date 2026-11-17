@@ -95,7 +95,8 @@ build_args() {
 }
 
 run_once() {
-  local tmp rc waited=0 limit=$(( ${WATCHDOG_MINUTES:-15} * 60 ))
+  # WATCHDOG_SECONDS overrides the minute budget (tests want a short one).
+  local tmp rc waited=0 limit=${WATCHDOG_SECONDS:-$(( ${WATCHDOG_MINUTES:-15} * 60 ))}
   tmp=$(mktemp)
   # env -u: strip nested-session guards so this also works when started from
   # inside a Claude session (no-op under launchd).
@@ -108,8 +109,10 @@ run_once() {
   local cpid=$!
   set +m
   # Watchdog: a 2026-07-08 run hung forever on stalled API connections.
+  # Poll in <=10s steps, so a short limit (tests) still gets checked.
+  local poll=10; [ "$limit" -lt "$poll" ] && poll="$limit"
   while kill -0 "$cpid" 2>/dev/null && [ "$waited" -lt "$limit" ]; do
-    sleep 10; waited=$((waited + 10))
+    sleep "$poll"; waited=$((waited + poll))
   done
   if kill -0 "$cpid" 2>/dev/null; then
     echo "WATCHDOG: claude ($cpid) still running after ${WATCHDOG_MINUTES:-15} min - killing it and its tools"
@@ -151,8 +154,8 @@ FIRST_LINE=$(( $( { wc -l <"$LOG"; } 2>/dev/null || echo 0) + 1 ))  # no log yet
     build_args
     run_once; rc=$?
     if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ] && [ "$USAGE_LIMIT" -eq 0 ]; then
-      echo "--- first attempt failed (rc=$rc), retrying in 60s ---"
-      sleep 60
+      echo "--- first attempt failed (rc=$rc), retrying in ${RETRY_DELAY:-60}s ---"
+      sleep "${RETRY_DELAY:-60}"
       run_once; rc=$?
     fi
     if [ "$rc" -ne 0 ]; then

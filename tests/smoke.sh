@@ -43,6 +43,8 @@ cat > "$FAKE/claude" <<'EOF'
 { echo "--- call"; echo "cwd=$PWD"; printf '%s\n' "$@"; } >> "$SANDBOX/claude.log"
 # FAKE_LEFTOVER=1: leave a background child behind, like a tool a job started.
 if [ -n "${FAKE_LEFTOVER:-}" ]; then sleep 300 </dev/null & echo $! > "$SANDBOX/leftover.pid"; fi
+# FAKE_HANG=1: never answer, so the watchdog has to kill us (#5).
+[ -n "${FAKE_HANG:-}" ] && sleep 300
 jq -n --arg r "${FAKE_RESULT:-Wrote the note}" --argjson e "${FAKE_ERROR:-false}" \
   '{type: "result", is_error: $e, result: $r, total_cost_usd: 0.42, num_turns: 7, duration_ms: 12000, session_id: "s1"}'
 EOF
@@ -158,6 +160,13 @@ check "usage limit exits 1" test "$rc" = 1
 check "and neither one retries" bash -c '! grep -q retrying "$1"' _ "$C/logs/standup-cron.log"
 FAKE_LEFTOVER=1 job standup
 check "a child a tool left behind dies with claude (#5)" bash -c \
+  'sleep 1; case "$(ps -o stat= -p "$(cat "$1")" 2>/dev/null)" in ""|Z*) ;; *) exit 1 ;; esac' _ "$SANDBOX/leftover.pid"
+# A hung claude: the watchdog must kill it AND the tool it left running (#5).
+rc=0; WATCHDOG_SECONDS=2 RETRY_DELAY=0 FAKE_HANG=1 FAKE_LEFTOVER=1 job standup || rc=$?
+check "a hung job hits the watchdog (exit 124)" test "$rc" = 124
+check "the watchdog reports killing claude and its tools" \
+  grep -q "WATCHDOG:.*killing it and its tools" "$C/logs/standup-cron.log"
+check "and a tool it left behind dies with claude's process group (#5)" bash -c \
   'sleep 1; case "$(ps -o stat= -p "$(cat "$1")" 2>/dev/null)" in ""|Z*) ;; *) exit 1 ;; esac' _ "$SANDBOX/leftover.pid"
 python3 -c 'import sys; p = sys.argv[1]; t = open(p).read(); open(p, "w").write(t.replace("max-turns: 50\n", "max-turns: 50\nmodel: sonnet\n", 1))' "$C/commands/standup.md"
 job standup
