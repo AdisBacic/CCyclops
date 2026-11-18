@@ -239,6 +239,44 @@ check "and the dashboard still renders" test "$(curl -s -o /dev/null -w '%{http_
 : > "$P"
 check "nor does an empty one" job standup
 rm -f "$P"
+
+echo "quotes"
+Q="$C/scripts/workflows-quotes.json"
+cp "$Q" "$SANDBOX/quotes.orig"
+set_quotes() { curl -s -o "$SANDBOX/qres" -w '%{http_code}' -H "Content-Type: ${2:-application/json}" \
+  --data-binary "$1" "http://127.0.0.1:$PORT/quotes"; }
+check "saving the quotes returns 200" test "$(set_quotes '{"quotes": ["a", "b"]}')" = 200
+check "with the list as saved" jq -e '. == {"ok": true, "quotes": ["a", "b"]}' "$SANDBOX/qres"
+check "and writes it to the quotes file" jq -e '.quotes == ["a", "b"]' "$Q"
+check "without leaving its tmp file behind" test ! -e "$Q.tmp"
+check "quotes are trimmed" test "$(set_quotes '{"quotes": ["  a  ", "b"]}')" = 200
+check "before they are saved" jq -e '.quotes == ["a", "b"]' "$Q"
+cp "$Q" "$SANDBOX/quotes.before"
+long=$(printf '%501s' | tr ' ' x)
+check "a non-JSON body, text/plain, a non-list, a non-string, an empty or blank quote and one over 500 characters are refused" \
+  test "$(set_quotes 'not json')$(set_quotes '{"quotes": ["a"]}' text/plain)$(set_quotes '{"quotes": "a"}')$(set_quotes '{"quotes": ["a", 1]}')$(set_quotes '{"quotes": ["a", ""]}')$(set_quotes '{"quotes": ["a", "  "]}')$(set_quotes "{\"quotes\": [\"a\", \"$long\"]}")" = 400400400400400400400
+check "and leave the quotes file byte-for-byte alone" cmp -s "$Q" "$SANDBOX/quotes.before"
+check "500 characters is still fine" test "$(set_quotes "{\"quotes\": [\"${long:1}\"]}")" = 200
+printf '{"theme": "green", "quotes": ["a"]}\n' > "$Q"
+set_quotes '{"quotes": ["c"]}' >/dev/null
+check "other top-level keys in the file are kept" jq -e '. == {"theme": "green", "quotes": ["c"]}' "$Q"
+set_quotes '{"quotes": ["Talk is <cheap>", "b"]}' >/dev/null
+check "the page has a Quotes section after the hooks, inside .wrap" bash -c \
+  '[[ "$1" == *"<div class=\"wrap\">"*"class=\"hooks\""*"<section class=\"quotes\"><h2>Quotes</h2>"*"<footer>"*"</div>"*"let QUOTES"* ]]' _ "$(page)"
+check "with one row per quote" test "$(page | grep -o 'class="qrow"' | wc -l | tr -d ' ')" = 2
+check "each with an edit and a delete control, and an add field" bash -c \
+  '[[ "$1" == *"<div class=\"qrow\" data-q=\"Talk is &lt;cheap&gt;\"><span class=\"qtext\">Talk is &lt;cheap&gt;</span><textarea class=\"qinput\""*"class=\"qbtn qedit\""*"class=\"qbtn qdel\""*"<div class=\"qrow\" data-q=\"b\">"*"class=\"qbtn qedit\""*"class=\"qbtn qdel\""*"<input class=\"qnew\""*"class=\"qbtn qaddbtn\""* ]]' _ "$(page)"
+check "and the rain gets the same list" bash -c '[[ "$1" == *"let QUOTES = [\"Talk is <cheap>\", \"b\"];"* ]]' _ "$(page)"
+check "a lang=sv cookie shows the section in Swedish, the quotes as they are" bash -c \
+  '[[ "$1" == *"<h2>Citat</h2>"* && "$1" == *">redigera</button>"* && "$1" == *">ta bort</button>"* && "$1" == *">lägg till</button>"* && "$1" == *"<span class=\"qtext\">Talk is &lt;cheap&gt;</span>"* ]]' _ \
+  "$(curl -s -b lang=sv "http://127.0.0.1:$PORT/")"
+check "so does --dump --lang sv" bash -c 'python3 "$1" --dump --lang sv | grep -qF "<h2>Citat</h2>"' _ "$C/scripts/workflows-dashboard.py"
+set_quotes '{"quotes": ["a</script>b"]}' >/dev/null
+check "a quote can't end the page's script" bash -c 'curl -s "$1" | grep -qF "let QUOTES = [\"a<\\/script>b\"];"' _ "http://127.0.0.1:$PORT/"
+check "an empty list is saved" bash -c '[ "$1" = 200 ] && jq -e ".quotes == []" "$2"' _ "$(set_quotes '{"quotes": []}')" "$Q"
+check "and the dashboard still renders" test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")" = 200
+check "with no quote rows" bash -c '[[ "$1" != *"class=\"qrow\""* && "$1" == *"let QUOTES = [];"* ]]' _ "$(page)"
+cp "$SANDBOX/quotes.orig" "$Q"
 kill "$DASH"; wait "$DASH" 2>/dev/null || true
 
 mv "$HOME/My Vault" "$HOME/gone"

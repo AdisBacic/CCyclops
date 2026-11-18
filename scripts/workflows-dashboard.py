@@ -42,6 +42,8 @@ COMMANDS_DIR = CLAUDE_DIR / "commands"
 SETTINGS = CLAUDE_DIR / "settings.json"
 
 QUOTES_FILE = Path(__file__).with_name("workflows-quotes.json")
+QUOTES_LOCK = threading.Lock()
+QUOTE_MAX = 500   # characters per quote, after trimming
 DISMISSED_FILE = CLAUDE_DIR / "cache" / "workflows-dismissed.json"
 CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
 MODELS_FILE = CLAUDE_DIR / "ccyclops" / "job-models.json"   # {"<job>": "<model>"}
@@ -121,6 +123,20 @@ STRINGS = {
         "pause_tip": "Skip this job's runs until you resume it",
         "resume_tip": "Paused — scheduled and manual runs are skipped until you resume it",
         "pause_err": "could not save the pause state",
+        "quotes_h": "Quotes",
+        "quotes_sub": "the lines that decode in the rain behind this page — saved to workflows-quotes.json, which you can still edit by hand.",
+        "quote_edit": "edit",
+        "quote_edit_tip": "Edit this quote",
+        "quote_delete": "delete",
+        "quote_delete_tip": "Delete this quote",
+        "quote_save": "save",
+        "quote_save_tip": "Save the edited quote",
+        "quote_cancel": "cancel",
+        "quote_cancel_tip": "Discard the edit",
+        "quote_new": "A new quote",
+        "quote_add": "add",
+        "quote_add_tip": "Add this quote to the rain",
+        "quotes_err": "could not save the quotes — each one must be 1–500 characters",
         "daily": "Daily",
         "weekdays": "Weekdays",
         "weekends": "Weekends",
@@ -174,6 +190,20 @@ STRINGS = {
         "pause_tip": "Hoppa över jobbets körningar tills du återupptar det",
         "resume_tip": "Pausad — schemalagda och manuella körningar hoppas över tills du återupptar det",
         "pause_err": "kunde inte spara pausläget",
+        "quotes_h": "Citat",
+        "quotes_sub": "raderna som avkodas i regnet bakom sidan — sparas i workflows-quotes.json, som du fortfarande kan redigera för hand.",
+        "quote_edit": "redigera",
+        "quote_edit_tip": "Redigera citatet",
+        "quote_delete": "ta bort",
+        "quote_delete_tip": "Ta bort citatet",
+        "quote_save": "spara",
+        "quote_save_tip": "Spara det redigerade citatet",
+        "quote_cancel": "avbryt",
+        "quote_cancel_tip": "Släng ändringen",
+        "quote_new": "Ett nytt citat",
+        "quote_add": "lägg till",
+        "quote_add_tip": "Lägg till citatet i regnet",
+        "quotes_err": "kunde inte spara citaten — vart och ett måste vara 1–500 tecken",
         "daily": "Dagligen",
         "weekdays": "Vardagar",
         "weekends": "Helger",
@@ -547,6 +577,33 @@ def load_quotes() -> list:
         return []
 
 
+def set_quotes(quotes) -> dict:
+    """Replace the whole list of quotes; other top-level keys in the file are kept."""
+    if not isinstance(quotes, list):
+        return {"ok": False, "error": "quotes must be a list"}
+    clean = []
+    for q in quotes:
+        if not isinstance(q, str):
+            return {"ok": False, "error": "every quote must be a string"}
+        q = q.strip()
+        if not q or len(q) > QUOTE_MAX:
+            return {"ok": False, "error": f"every quote must be 1-{QUOTE_MAX} characters"}
+        clean.append(q)
+    with QUOTES_LOCK:
+        text = read_text(QUOTES_FILE)
+        try:
+            data = json.loads(text) if text.strip() else {}
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):  # hand-edited into something else: don't overwrite it
+            return {"ok": False, "error": f"{QUOTES_FILE.name} is not a JSON object"}
+        data["quotes"] = clean
+        tmp = QUOTES_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        tmp.replace(QUOTES_FILE)
+    return {"ok": True, "quotes": clean}
+
+
 def load_dismissed() -> set:
     try:
         return set(json.loads(read_text(DISMISSED_FILE)))
@@ -695,6 +752,22 @@ table.hooks td:nth-child(2) { white-space: nowrap; width: 1%; padding-right: 26p
 table.hooks td:last-child { color: var(--dim); }
 table.hooks tr:first-child td { border-top: 0; }
 .manual .name { font-size: 14px; } .manual .card { padding: 12px 18px; }
+.qrow { display: flex; align-items: baseline; gap: 8px; border-top: 1px solid var(--line); padding: 7px 0; }
+.qrow:first-child { border-top: 0; padding-top: 0; }
+.qtext { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qrow .qinput, .qrow .qsave, .qrow .qcancel { display: none; }
+.qrow.editing .qinput, .qrow.editing .qsave, .qrow.editing .qcancel { display: inline-block; }
+.qrow.editing .qtext, .qrow.editing .qedit, .qrow.editing .qdel { display: none; }
+.qinput, .qnew { flex: 1; background: var(--panel2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 6px; padding: 4px 8px; font: inherit; font-size: 12.5px; resize: vertical; }
+.qinput:focus, .qnew:focus { outline: none; border-color: var(--ok); }
+.qadd { display: flex; align-items: baseline; gap: 8px; margin-top: 12px; }
+.qbtn { background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 99px; padding: 1.5px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.qbtn:hover, .qbtn:focus { outline: none; border-color: var(--ok); color: var(--ink); }
+.qerr { display: none; color: var(--err); font-size: 12px; margin: 8px 0 0; }
+.quotes.err .qerr { display: block; }
+.quotes.err .qrow.editing .qinput, .quotes.err .qnew { border-color: var(--err); }
 footer { margin-top: 44px; color: var(--faint); font-size: 11px;
   border-top: 1px solid var(--line); padding-top: 14px; }
 """
@@ -707,12 +780,20 @@ setInterval(() => {
 }, 1000);
 
 // ---- content refresh via fetch (keeps the rain running, no page reload) ----
-async function refresh() {
+// force: also replace a Quotes section that is being edited (after it was saved)
+async function refresh(force) {
   try {
     const t = await (await fetch(location.pathname)).text();
     const doc = new DOMParser().parseFromString(t, "text/html");
     const cur = document.querySelector(".wrap"), next = doc.querySelector(".wrap");
-    if (cur && next) cur.innerHTML = next.innerHTML;
+    if (!cur || !next) return;
+    const keep = !force && quotesBusy() && cur.querySelector(".quotes");
+    const nq = next.querySelector(".quotes");
+    if (!keep || !nq) { cur.innerHTML = next.innerHTML; return; }
+    // swap everything around the Quotes section, which stays as it is (focus, typed text)
+    [...cur.childNodes].forEach(n => { if (n !== keep) n.remove(); });
+    while (next.firstChild !== nq) keep.before(next.firstChild);
+    while (nq.nextSibling) cur.append(nq.nextSibling);
   } catch (e) {}
 }
 setInterval(refresh, 60000);
@@ -757,6 +838,49 @@ document.addEventListener("click", async ev => {
   if (ok) return refresh();
   btn.classList.add("err");
   btn.title = btn.dataset.err;
+});
+
+// ---- quotes in the rain: add, edit, delete (persists server-side, the rain uses the new list) ----
+function quotesBusy() {   // typed but not saved, or being typed: refresh() leaves the section alone
+  const s = document.querySelector(".quotes");
+  if (!s) return false;
+  const a = document.activeElement;
+  return (s.contains(a) && a.matches("input, textarea")) || !!s.querySelector(".qrow.editing")
+    || [...s.querySelectorAll("input, textarea")].some(i => i.value !== i.defaultValue);
+}
+async function saveQuotes(s, list) {
+  let res = null;
+  try {
+    const r = await fetch("/quotes", {method: "POST", headers: {"Content-Type": "application/json"},
+                                      body: JSON.stringify({quotes: list})});
+    if (r.ok) res = await r.json();
+  } catch (e) {}
+  if (!res || !res.ok) return s.classList.add("err");   // typed text stays where it is
+  QUOTES = res.quotes;                                   // the rain picks from the new list
+  refresh(true);
+}
+document.addEventListener("click", ev => {
+  const btn = ev.target.closest(".quotes button");
+  if (!btn) return;
+  const s = btn.closest(".quotes"), rows = [...s.querySelectorAll(".qrow")];
+  const row = btn.closest(".qrow"), i = rows.indexOf(row), ta = row && row.querySelector(".qinput");
+  const saved = rows.map(r => r.dataset.q);
+  if (btn.classList.contains("qedit")) {
+    row.classList.add("editing");
+    ta.focus();
+  } else if (btn.classList.contains("qcancel")) {
+    ta.value = ta.defaultValue;
+    row.classList.remove("editing");
+    s.classList.remove("err");
+  } else if (btn.classList.contains("qsave")) {
+    saved[i] = ta.value;
+    saveQuotes(s, saved);
+  } else if (btn.classList.contains("qdel")) {
+    saved.splice(i, 1);
+    saveQuotes(s, saved);
+  } else if (btn.classList.contains("qaddbtn")) {
+    saveQuotes(s, [...saved, s.querySelector(".qnew").value]);
+  }
 });
 
 // ---- language toggle (a cookie the server renders from, so refreshes and reloads keep it) ----
@@ -831,10 +955,10 @@ async function showQuote(text) {
   qel.textContent = ""; qel.style.opacity = 0;
 }
 (async function quoteLoop() {
-  if (!QUOTES.length) return;
   let prev = -1;
   await sleep(2000);
   for (;;) {
+    if (!QUOTES.length) { await sleep(1000); continue; }   // until a quote is added on the page
     let i = (Math.random() * QUOTES.length) | 0;
     if (QUOTES.length > 1 && i === prev) i = (i + 1) % QUOTES.length;
     prev = i;
@@ -949,6 +1073,19 @@ def build_html(lang: str = "en") -> str:
             hooks_html += (f"<tr><td>{e(ev) if i == 0 else ''}</td>"
                            f"<td>{e(nm)}</td><td>{e(blurb) or '&mdash;'}</td></tr>")
 
+    quotes = load_quotes()
+
+    def qbtn(cls, label, tip):
+        return f'<button class="qbtn {cls}" title="{e(tr(lang, tip))}">{e(tr(lang, label))}</button>'
+    quotes_html = "".join(
+        f'<div class="qrow" data-q="{e(q)}"><span class="qtext">{e(q)}</span>'
+        f'<textarea class="qinput" rows="2" aria-label="{e(tr(lang, "quote_edit_tip"))}">{e(q)}</textarea>'
+        f'{qbtn("qedit", "quote_edit", "quote_edit_tip")}{qbtn("qdel", "quote_delete", "quote_delete_tip")}'
+        f'{qbtn("qsave", "quote_save", "quote_save_tip")}{qbtn("qcancel", "quote_cancel", "quote_cancel_tip")}</div>'
+        for q in quotes)
+    quote_new = e(tr(lang, "quote_new"))
+    quotes_js = json.dumps(quotes, ensure_ascii=False).replace("</", "<\\/")  # a quote can't end the <script>
+
     now = datetime.now()
     today = f"{weekday(lang, now)} {now:%d} {STRINGS[lang]['months'][now.month - 1]}"
     scanned = tr(lang, "scanned", time=f"{now:%H:%M:%S}")
@@ -986,9 +1123,14 @@ def build_html(lang: str = "en") -> str:
   <section><h2>{e(tr(lang, "hooks_h"))}</h2>
     <p class="sub">{e(tr(lang, "hooks_sub"))}</p>
     <table class="hooks">{hooks_html or f'<tr><td colspan="3">{none}</td></tr>'}</table></section>
+  <section class="quotes"><h2>{e(tr(lang, "quotes_h"))}</h2>
+    <p class="sub">{e(tr(lang, "quotes_sub"))}</p>
+    <div class="card">{quotes_html or f'<p class="desc">{none}</p>'}
+      <div class="qadd"><input class="qnew" type="text" placeholder="{quote_new}" aria-label="{quote_new}">{qbtn("qaddbtn", "quote_add", "quote_add_tip")}</div>
+      <p class="qerr" role="alert">{e(tr(lang, "quotes_err"))}</p></div></section>
   <footer>{e(footer)}</footer>
 </div>
-<script>const QUOTES = {json.dumps(load_quotes(), ensure_ascii=False)};</script>
+<script>let QUOTES = {quotes_js};</script>
 <script>{JS}</script>
 </body></html>"""
 
@@ -1033,6 +1175,21 @@ def serve(port: int, open_browser: bool):
                     assert self.headers.get("Content-Type", "").startswith("application/json")
                     req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                     res = set_job_paused(str(req.get("name", "")), req.get("paused"))
+                except Exception:
+                    res = {"ok": False, "error": "bad request"}
+                body = json.dumps(res).encode()
+                self.send_response(200 if res["ok"] else 400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/quotes":
+                # JSON only, for the same reason as /model
+                try:
+                    assert self.headers.get("Content-Type", "").startswith("application/json")
+                    req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    res = set_quotes(req.get("quotes"))
                 except Exception:
                     res = {"ok": False, "error": "bad request"}
                 body = json.dumps(res).encode()
