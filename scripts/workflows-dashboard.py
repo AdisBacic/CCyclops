@@ -46,6 +46,8 @@ CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
 MODELS_FILE = CLAUDE_DIR / "ccyclops" / "job-models.json"   # {"<job>": "<model>"}
 MODEL_CHOICES = ("opus", "sonnet", "haiku")
 MODELS_LOCK = threading.Lock()
+PAUSED_FILE = CLAUDE_DIR / "ccyclops" / "job-paused.json"   # {"<job>": true}
+PAUSED_LOCK = threading.Lock()
 
 
 def load_config() -> dict:
@@ -382,6 +384,34 @@ def set_job_model(name: str, model: str) -> dict:
     return {"ok": True}
 
 
+def load_paused() -> set:
+    try:
+        d = json.loads(read_text(PAUSED_FILE))
+        return {k for k, v in d.items() if v is True}
+    except Exception:
+        return set()
+
+
+def set_job_paused(name: str, paused) -> dict:
+    """Pause a job (run-job.sh skips it, launchd or by hand) or resume it. Applies from the next run."""
+    flow = next((f for f in scan_workflows(load_commands()) if f.name == name), None)
+    if not flow or flow.default_model is None:
+        return {"ok": False, "error": f"no job named {name!r}"}
+    if not isinstance(paused, bool):
+        return {"ok": False, "error": "paused must be true or false"}
+    with PAUSED_LOCK:
+        jobs = {k: True for k in load_paused()}
+        if paused:
+            jobs[name] = True
+        else:
+            jobs.pop(name, None)
+        PAUSED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PAUSED_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(jobs, indent=1, sort_keys=True) + "\n")
+        tmp.replace(PAUSED_FILE)
+    return {"ok": True}
+
+
 def load_quotes() -> list:
     try:
         q = json.loads(read_text(QUOTES_FILE)).get("quotes", [])
@@ -492,6 +522,7 @@ h2 { font-size: 11px; font-weight: 600; letter-spacing: .28em; text-transform: u
 .dot.ok   { background: var(--ok);   box-shadow: 0 0 8px 1px #7fd97a66; }
 .dot.err  { background: var(--err);  box-shadow: 0 0 8px 1px #ef6b5e66; }
 .dot.off  { background: #3a4a3a; }
+.dot.warn { background: var(--warn); box-shadow: 0 0 8px 1px #e8b04b66; }
 .dot.ok.live { animation: pulse 2.4s ease-in-out infinite; }
 @keyframes pulse { 50% { box-shadow: 0 0 12px 3px #7fd97a55; } }
 .name { font-size: 16px; font-weight: 600; color: #eaf5e7; }
@@ -501,6 +532,10 @@ h2 { font-size: 11px; font-weight: 600; letter-spacing: .28em; text-transform: u
   border-radius: 99px; padding: 1.5px 6px; font: inherit; font-size: 11.5px; cursor: pointer; }
 .modelsel:hover, .modelsel:focus { outline: none; border-color: var(--ok); color: var(--ink); }
 .modelsel.err { border-color: var(--err); color: var(--err); }
+.pausebtn { background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 99px; padding: 1.5px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.pausebtn:hover, .pausebtn:focus { outline: none; border-color: var(--ok); color: var(--ink); }
+.pausebtn.err { border-color: var(--err); color: var(--err); }
 .right { margin-left: auto; color: var(--dim); font-size: 12px; white-space: nowrap; }
 .right .ok { color: var(--ok); } .right .err { color: var(--err); }
 .desc { color: var(--dim); margin: 7px 0 0; max-width: 62ch; }
@@ -539,14 +574,15 @@ setInterval(() => {
 }, 1000);
 
 // ---- content refresh via fetch (keeps the rain running, no page reload) ----
-setInterval(async () => {
+async function refresh() {
   try {
     const t = await (await fetch(location.pathname)).text();
     const doc = new DOMParser().parseFromString(t, "text/html");
     const cur = document.querySelector(".wrap"), next = doc.querySelector(".wrap");
     if (cur && next) cur.innerHTML = next.innerHTML;
   } catch (e) {}
-}, 60000);
+}
+setInterval(refresh, 60000);
 
 // ---- dismissable failure banner (persists server-side) ----
 document.addEventListener("click", async ev => {
@@ -573,6 +609,21 @@ document.addEventListener("change", async ev => {
   } catch (e) {}
   sel.classList.toggle("err", !ok);
   sel.title = ok ? "Model for this job — used from its next run" : "could not save the model";
+});
+
+// ---- per-job pause toggle (persists server-side, run-job.sh skips a paused job) ----
+document.addEventListener("click", async ev => {
+  const btn = ev.target.closest(".pausebtn");
+  if (!btn) return;
+  let ok = false;
+  try {
+    const r = await fetch("/pause", {method: "POST", headers: {"Content-Type": "application/json"},
+                                     body: JSON.stringify({name: btn.dataset.name, paused: btn.dataset.paused !== "true"})});
+    ok = r.ok;
+  } catch (e) {}
+  if (ok) return refresh();
+  btn.classList.add("err");
+  btn.title = "could not save the pause state";
 });
 
 // ---- matrix rain ----
@@ -651,7 +702,7 @@ async function showQuote(text) {
 """
 
 
-def render_workflow(f: Workflow, models: dict) -> str:
+def render_workflow(f: Workflow, models: dict, paused: set) -> str:
     last = f.runs[0] if f.runs else None
     if last and last.exit == 0:
         dot, last_txt = "ok", f'<span class="ok">✓</span> {e(last.ts)}'
@@ -661,6 +712,10 @@ def render_workflow(f: Workflow, models: dict) -> str:
         dot, last_txt = ("ok" if f.loaded else "off"), "no runs logged"
     live = " live" if f.loaded else ""
     nxt = f" · next {e(f.next_run)}" if f.next_run else ""
+    schedule = e(f.schedule)
+    is_paused = f.default_model is not None and f.name in paused
+    if is_paused:
+        dot, live, nxt, schedule = "warn", "", "", f"paused · {schedule}"
     loaded_txt = "loaded" if f.loaded else '<span class="err">NOT LOADED</span>'
 
     ticks = ""
@@ -691,13 +746,21 @@ def render_workflow(f: Workflow, models: dict) -> str:
         model_sel = (f'<select class="modelsel" data-name="{e(f.name)}" '
                      f'title="Model for this job — used from its next run">{opts}</select>')
 
+    pause_btn = ""
+    if f.default_model is not None:
+        state, label, tip = (("true", "resume", "Paused — scheduled and manual runs are skipped until you resume it")
+                             if is_paused else ("false", "pause", "Skip this job's runs until you resume it"))
+        pause_btn = (f'<button class="pausebtn" data-name="{e(f.name)}" data-paused="{state}" '
+                     f'title="{e(tip)}">{label}</button>')
+
     return f"""
     <div class="card">
       <div class="row">
         <span class="dot {dot}{live}"></span>
         <span class="name">{e(DISPLAY_NAMES.get(f.name, f.name))}</span>
-        <span class="chip">{e(f.schedule)}</span>
+        <span class="chip">{schedule}</span>
         {model_sel}
+        {pause_btn}
         <span class="right">last: {last_txt}</span>
       </div>
       <p class="desc">{e(f.description) or "&mdash;"}</p>
@@ -711,6 +774,7 @@ def build_html() -> str:
     commands = load_commands()
     flows = scan_workflows(commands)
     models = load_models()
+    paused = load_paused()
     hooks = scan_hooks()
     fails = recent_failures(flows)
     scheduled_names = {f.name for f in flows}
@@ -755,7 +819,7 @@ def build_html() -> str:
   {banner}
   <section><h2>Scheduled</h2>
     <p class="sub">launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.</p>
-    {"".join(render_workflow(f, models) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
+    {"".join(render_workflow(f, models, paused) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
   <section class="manual"><h2>Manual commands</h2>
     <p class="sub">slash commands you run yourself inside a Claude Code session — nothing happens until you type them.</p>
     {manual_html or '<p class="desc">None.</p>'}</section>
@@ -794,6 +858,21 @@ def serve(port: int, open_browser: bool):
                     assert self.headers.get("Content-Type", "").startswith("application/json")
                     req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
                     res = set_job_model(str(req.get("name", "")), str(req.get("model", "")))
+                except Exception:
+                    res = {"ok": False, "error": "bad request"}
+                body = json.dumps(res).encode()
+                self.send_response(200 if res["ok"] else 400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            if self.path == "/pause":
+                # JSON only, for the same reason as /model
+                try:
+                    assert self.headers.get("Content-Type", "").startswith("application/json")
+                    req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    res = set_job_paused(str(req.get("name", "")), req.get("paused"))
                 except Exception:
                     res = {"ok": False, "error": "bad request"}
                 body = json.dumps(res).encode()

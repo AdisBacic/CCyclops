@@ -186,6 +186,46 @@ check "an unknown model or job is refused" test "$(set_model standup gpt)$(set_m
 check "picking default clears it" test "$(set_model standup "")" = 200
 job standup
 check "back on the model: line" test "$(arg_after --model)" = sonnet
+
+echo "pause toggle"
+P="$C/ccyclops/job-paused.json"
+set_pause() { curl -s -o /dev/null -w '%{http_code}' -H "Content-Type: ${3:-application/json}" \
+  -d "{\"name\": \"$1\", \"paused\": $2}" "http://127.0.0.1:$PORT/pause"; }
+page() { curl -s "http://127.0.0.1:$PORT/"; }
+exits() { grep -c '^=== exit' "$C/logs/standup-cron.log"; }
+calls() { grep -c '^--- call$' "$SANDBOX/claude.log"; }
+check "the dashboard renders with no pause file" test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")" = 200
+check "each job card has a pause button" bash -c '[[ "$1" == *"class=\"pausebtn\" data-name=\"pr-queue\" data-paused=\"false\""*">pause</button>"* ]]' _ "$(page)"
+set_model standup opus >/dev/null
+check "pausing a job is saved" test "$(set_pause standup true)" = 200
+check "as {\"<job>\": true}" jq -e '. == {"standup": true}' "$P"
+check "the card shows it paused" bash -c '[[ "$1" == *"<span class=\"dot warn\"></span>"* && "$1" == *"<span class=\"chip\">paused · "* && "$1" == *"data-name=\"standup\" data-paused=\"true\""*">resume</button>"* ]]' _ "$(page)"
+check "with no next run" bash -c '[ -n "$1" ] && [[ "$1" != *"next "* ]]' _ "$(page | grep -o '<div class="kv">[^<]*claude-standup.plist')"
+check "and its model dropdown" bash -c '[[ "$1" == *"value=\"opus\" selected"* ]]' _ "$(card standup)"
+e0=$(exits) c0=$(calls)
+rc=0; out=$(bash "$C/scripts/run-job.sh" standup 2>&1) || rc=$?
+check "a paused job exits 0" test "$rc" = 0
+check "with one line telling how to resume it" test "$out" = "standup is paused — resume it on the dashboard (ccyclops)"
+check "and neither logs a run nor starts claude" test "$(exits) $(calls)" = "$e0 $c0"
+cp "$P" "$SANDBOX/paused.before"
+check "an unknown job, the dashboard, a non-boolean or a non-JSON body is refused" \
+  test "$(set_pause nope true)$(set_pause workflows true)$(set_pause standup '"yes"')$(set_pause standup null)$(set_pause standup true text/plain)" = 400400400400400
+check "and leaves the pause file alone" cmp -s "$P" "$SANDBOX/paused.before"
+check "the dashboard's own card has no pause button" bash -c '[[ "$1" != *"class=\"pausebtn\" data-name=\"workflows\""* ]]' _ "$(page)"
+install_ok
+check "a re-install keeps the pause" cmp -s "$P" "$SANDBOX/paused.before"
+check "resuming is saved" test "$(set_pause standup false)" = 200
+check "and removes the key" jq -e '. == {}' "$P"
+job standup
+check "the next run logs again" test "$(exits) $(calls)" = "$((e0 + 1)) $((c0 + 1))"
+check "with its model pick" test "$(arg_after --model)" = opus
+set_model standup "" >/dev/null
+echo 'not json' > "$P"
+check "a malformed pause file pauses nothing" job standup
+check "and the dashboard still renders" test "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/")" = 200
+: > "$P"
+check "nor does an empty one" job standup
+rm -f "$P"
 kill "$DASH"; wait "$DASH" 2>/dev/null || true
 
 mv "$HOME/My Vault" "$HOME/gone"
