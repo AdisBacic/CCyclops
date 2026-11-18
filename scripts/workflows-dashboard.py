@@ -44,6 +44,7 @@ SETTINGS = CLAUDE_DIR / "settings.json"
 QUOTES_FILE = Path(__file__).with_name("workflows-quotes.json")
 QUOTES_LOCK = threading.Lock()
 QUOTE_MAX = 500   # characters per quote, after trimming
+QUOTES_BODY_MAX = 64 * 1024   # bytes in a POST /quotes body
 DISMISSED_FILE = CLAUDE_DIR / "cache" / "workflows-dismissed.json"
 CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
 MODELS_FILE = CLAUDE_DIR / "ccyclops" / "job-models.json"   # {"<job>": "<model>"}
@@ -1185,10 +1186,15 @@ def serve(port: int, open_browser: bool):
                 self.wfile.write(body)
                 return
             if self.path == "/quotes":
-                # JSON only, for the same reason as /model
+                # JSON only, for the same reason as /model; a body outside 0..64 KB
+                # is refused before anything is read
                 try:
-                    assert self.headers.get("Content-Type", "").startswith("application/json")
-                    req = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
+                    ln = int(self.headers.get("Content-Length", 0))
+                    if not self.headers.get("Content-Type", "").startswith("application/json"):
+                        raise ValueError("not JSON")
+                    if not 0 <= ln <= QUOTES_BODY_MAX:
+                        raise ValueError("bad Content-Length")
+                    req = json.loads(self.rfile.read(ln))
                     res = set_quotes(req.get("quotes"))
                 except Exception:
                     res = {"ok": False, "error": "bad request"}

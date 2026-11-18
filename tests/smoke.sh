@@ -256,6 +256,9 @@ long=$(printf '%501s' | tr ' ' x)
 check "a non-JSON body, text/plain, a non-list, a non-string, an empty or blank quote and one over 500 characters are refused" \
   test "$(set_quotes 'not json')$(set_quotes '{"quotes": ["a"]}' text/plain)$(set_quotes '{"quotes": "a"}')$(set_quotes '{"quotes": ["a", 1]}')$(set_quotes '{"quotes": ["a", ""]}')$(set_quotes '{"quotes": ["a", "  "]}')$(set_quotes "{\"quotes\": [\"a\", \"$long\"]}")" = 400400400400400400400
 check "and leave the quotes file byte-for-byte alone" cmp -s "$Q" "$SANDBOX/quotes.before"
+python3 -c 'import json; print(json.dumps({"quotes": ["x" * 500] * 140}))' > "$SANDBOX/big.json"
+check "so is a body over 64 KB, even of valid quotes" test "$(set_quotes "@$SANDBOX/big.json")" = 400
+check "which leaves the file alone too" cmp -s "$Q" "$SANDBOX/quotes.before"
 check "500 characters is still fine" test "$(set_quotes "{\"quotes\": [\"${long:1}\"]}")" = 200
 printf '{"theme": "green", "quotes": ["a"]}\n' > "$Q"
 set_quotes '{"quotes": ["c"]}' >/dev/null
