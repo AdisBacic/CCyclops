@@ -129,6 +129,15 @@ python3 "$C/scripts/workflows-dashboard.py" --dump > "$SANDBOX/dash.html"
 check "dashboard renders the new schedules" grep -q "Fri 16:00" "$SANDBOX/dash.html"
 check "dashboard is branded CCyclops" grep -q "<title>CCyclops</title>" "$SANDBOX/dash.html"
 check "its own card says dashboard" grep -q '<span class="name">dashboard</span>' "$SANDBOX/dash.html"
+check "is English by default, with a toggle to Swedish" bash -c \
+  'grep -qF "<html lang=\"en\">" "$1" && grep -qF "class=\"langbtn\" data-lang=\"sv\"" "$1" && grep -qF "</svg>SV</button>" "$1"' _ "$SANDBOX/dash.html"
+python3 "$C/scripts/workflows-dashboard.py" --dump --lang sv > "$SANDBOX/dash-sv.html"
+check "--lang sv renders it in Swedish" bash -c \
+  'grep -qF "<html lang=\"sv\">" "$1" && grep -qF "<h2>Schemalagt</h2>" "$1" && grep -qF ">pausa</button>" "$1" && grep -qF "fre 16:00" "$1"' _ "$SANDBOX/dash-sv.html"
+check "but not the user's own text" bash -c \
+  'grep -qF "<span class=\"name\">dashboard</span>" "$1" && grep -qF "<title>CCyclops</title>" "$1"' _ "$SANDBOX/dash-sv.html"
+check "--lang takes only en and sv" bash -c '! python3 "$1" --dump --lang de 2>/dev/null' _ "$C/scripts/workflows-dashboard.py"
+check "and nothing calls setlocale" bash -c '! grep -q setlocale "$1"' _ "$C/scripts/workflows-dashboard.py"
 
 echo "re-run with nothing changed"
 cp "$C/settings.json" "$SANDBOX/settings.before"
@@ -200,6 +209,10 @@ set_model standup opus >/dev/null
 check "pausing a job is saved" test "$(set_pause standup true)" = 200
 check "as {\"<job>\": true}" jq -e '. == {"standup": true}' "$P"
 check "the card shows it paused" bash -c '[[ "$1" == *"<span class=\"dot warn\"></span>"* && "$1" == *"<span class=\"chip\">paused · "* && "$1" == *"data-name=\"standup\" data-paused=\"true\""*">resume</button>"* ]]' _ "$(page)"
+check "a lang=sv cookie serves it in Swedish" bash -c '[[ "$1" == *"<html lang=\"sv\">"* && "$1" == *"<h2>Schemalagt</h2>"* && "$1" == *"</svg>EN</button>"* && "$1" == *"data-name=\"standup\" data-paused=\"true\""*">återuppta</button>"* ]]' _ \
+  "$(curl -s -b lang=sv "http://127.0.0.1:$PORT/")"
+check "no cookie or an unknown one serves English" bash -c '[[ "$1" == *"<html lang=\"en\">"* && "$2" == *"<html lang=\"en\">"* && "$2" == *"</svg>SV</button>"* ]]' _ \
+  "$(page)" "$(curl -s -b lang=xx "http://127.0.0.1:$PORT/")"
 check "with no next run" bash -c '[ -n "$1" ] && [[ "$1" != *"next "* ]]' _ "$(page | grep -o '<div class="kv">[^<]*claude-standup.plist')"
 check "and its model dropdown" bash -c '[[ "$1" == *"value=\"opus\" selected"* ]]' _ "$(card standup)"
 e0=$(exits) c0=$(calls)

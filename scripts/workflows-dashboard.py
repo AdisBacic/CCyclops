@@ -16,6 +16,7 @@ Usage:
   ccyclops --port 9000      serve on another port
   ccyclops --no-open        don't open the browser
   ccyclops --dump           print the HTML once to stdout (no server)
+  ccyclops --dump --lang sv print it in Swedish (the server uses the page's lang cookie instead)
 """
 
 import argparse
@@ -30,6 +31,7 @@ import sys
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from http.cookies import CookieError, SimpleCookie
 from pathlib import Path
 
 HOME = Path.home()
@@ -39,7 +41,6 @@ LOGS_DIR = CLAUDE_DIR / "logs"
 COMMANDS_DIR = CLAUDE_DIR / "commands"
 SETTINGS = CLAUDE_DIR / "settings.json"
 
-WEEKDAYS = {0: "Sun", 1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
 QUOTES_FILE = Path(__file__).with_name("workflows-quotes.json")
 DISMISSED_FILE = CLAUDE_DIR / "cache" / "workflows-dismissed.json"
 CONFIG_FILE = CLAUDE_DIR / "ccyclops" / "config.sh"
@@ -73,11 +74,139 @@ PORT = int(CONFIG.get("DASHBOARD_PORT") or 8787)
 # The dashboard's own agent is labelled claude-workflows; show it as what it is.
 DISPLAY_NAMES = {"workflows": "dashboard"}
 
-# Hand-written descriptions win over anything derived from files.
-DESCRIPTIONS = {
-    "workflows": f"This dashboard — serves this page at localhost:{PORT}, always running, "
-                 "listing every Claude automation on this Mac.",
+# Hand-written descriptions win over anything derived from files (keys into STRINGS).
+DESCRIPTIONS = {"workflows": "desc_workflows"}
+
+# Every string the dashboard itself produces, per language. User data (job names,
+# descriptions, run summaries, file names, quotes) is never translated.
+STRINGS = {
+    "en": {
+        "days": ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"),
+        "months": ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
+        "lang_switch": "Switch the dashboard to Swedish",
+        "scanned": "scanned {time} · auto-refresh 60s",
+        "scheduled": "Scheduled",
+        "scheduled_sub": "launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.",
+        "no_agents": "No launchd agents found.",
+        "manual_h": "Manual commands",
+        "manual_sub": "slash commands you run yourself inside a Claude Code session — nothing happens until you type them.",
+        "manual": "manual",
+        "none": "None.",
+        "hooks_h": "Session hooks",
+        "hooks_sub": "scripts Claude Code fires automatically at the start and end of every session (configured in ~/.claude/settings.json).",
+        "footer": "settings: {config} — edit it, then run ./install.sh · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json",
+        "footer_config": "config.sh in your clone",
+        "dismiss": "Dismiss",
+        "failed": "{ts} — {name} failed ({why})",
+        "watchdog_timeout": "watchdog timeout",
+        "exit": "exit {code}",
+        "no_runs": "no runs logged",
+        "next": "next {when}",
+        "paused": "paused · {schedule}",
+        "loaded": "loaded",
+        "not_loaded": "NOT LOADED",
+        "last": "last:",
+        "last_runs": "last {n} runs",
+        "spent": "${cost:.2f} spent",
+        "run_history": "run history",
+        "watchdog": "watchdog",
+        "turns": "{n} turns",
+        "log": "log:",
+        "model_default": "default · {model}",
+        "claude_code": "Claude Code",
+        "model_title": "Model for this job — used from its next run",
+        "model_err": "could not save the model",
+        "pause": "pause",
+        "resume": "resume",
+        "pause_tip": "Skip this job's runs until you resume it",
+        "resume_tip": "Paused — scheduled and manual runs are skipped until you resume it",
+        "pause_err": "could not save the pause state",
+        "daily": "Daily",
+        "weekdays": "Weekdays",
+        "weekends": "Weekends",
+        "always_on": "always on",
+        "every": "every {n}",
+        "on_demand": "on demand",
+        "today": "today",
+        "tomorrow": "tomorrow",
+        "no_output": "(no output captured)",
+        "desc_workflows": "This dashboard — serves this page at localhost:{port}, always running, "
+                          "listing every Claude automation on this Mac.",
+    },
+    "sv": {
+        "days": ("sön", "mån", "tis", "ons", "tor", "fre", "lör"),
+        "months": ("jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"),
+        "lang_switch": "Byt panelen till engelska",
+        "scanned": "skannad {time} · uppdateras var 60:e s",
+        "scheduled": "Schemalagt",
+        "scheduled_sub": "launchd-agenter som kör Claude (eller serverar den här sidan) automatiskt — ingen session eller terminal behövs.",
+        "no_agents": "Inga launchd-agenter hittades.",
+        "manual_h": "Manuella kommandon",
+        "manual_sub": "snedstreckskommandon du kör själv i en Claude Code-session — inget händer förrän du skriver dem.",
+        "manual": "manuell",
+        "none": "Inga.",
+        "hooks_h": "Sessionskrokar",
+        "hooks_sub": "skript som Claude Code kör automatiskt i början och slutet av varje session (inställda i ~/.claude/settings.json).",
+        "footer": "inställningar: {config} — redigera den och kör sedan ./install.sh · källor: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json",
+        "footer_config": "config.sh i din klon",
+        "dismiss": "Avfärda",
+        "failed": "{ts} — {name} misslyckades ({why})",
+        "watchdog_timeout": "watchdog-tidsgräns",
+        "exit": "slutkod {code}",
+        "no_runs": "inga körningar loggade",
+        "next": "nästa {when}",
+        "paused": "pausad · {schedule}",
+        "loaded": "laddad",
+        "not_loaded": "INTE LADDAD",
+        "last": "senast:",
+        "last_runs": "senaste {n} körningarna",
+        "spent": "${cost:.2f} förbrukat",
+        "run_history": "körhistorik",
+        "watchdog": "watchdog",
+        "turns": "{n} turer",
+        "log": "logg:",
+        "model_default": "standard · {model}",
+        "claude_code": "Claude Code",
+        "model_title": "Modell för det här jobbet — används från nästa körning",
+        "model_err": "kunde inte spara modellen",
+        "pause": "pausa",
+        "resume": "återuppta",
+        "pause_tip": "Hoppa över jobbets körningar tills du återupptar det",
+        "resume_tip": "Pausad — schemalagda och manuella körningar hoppas över tills du återupptar det",
+        "pause_err": "kunde inte spara pausläget",
+        "daily": "Dagligen",
+        "weekdays": "Vardagar",
+        "weekends": "Helger",
+        "always_on": "alltid på",
+        "every": "var {n}",
+        "on_demand": "vid behov",
+        "today": "idag",
+        "tomorrow": "imorgon",
+        "no_output": "(ingen utdata fångades)",
+        "desc_workflows": "Den här panelen — serverar sidan på localhost:{port}, körs alltid "
+                          "och listar varje Claude-automation på den här Macen.",
+    },
 }
+
+
+def tr(lang: str, key: str, **kw) -> str:
+    s = STRINGS[lang][key]
+    return s.format(**kw) if kw else s
+
+
+def weekday(lang: str, dt: datetime) -> str:
+    return STRINGS[lang]["days"][dt.isoweekday() % 7]
+
+
+def request_lang(cookie_header: str) -> str:
+    """The page language from a Cookie header: exactly "en" or "sv", else "en"."""
+    jar = SimpleCookie()
+    try:
+        jar.load(cookie_header or "")
+    except CookieError:
+        return "en"
+    m = jar.get("lang")
+    return m.value if m and m.value in STRINGS else "en"
 
 
 # --------------------------------------------------------------------------- data
@@ -167,7 +296,7 @@ def load_commands() -> dict:
 
 # ----------------------------------------------------------------------- launchd
 
-def humanize_schedule(plist: dict) -> str:
+def humanize_schedule(plist: dict, lang: str = "en") -> str:
     cal = plist.get("StartCalendarInterval")
     if cal:
         entries = cal if isinstance(cal, list) else [cal]
@@ -180,28 +309,28 @@ def humanize_schedule(plist: dict) -> str:
         parts = []
         for t, days in sorted(by_time.items()):
             if not days or len(days) == 7:
-                parts.append(f"Daily {t}")
+                parts.append(f"{tr(lang, 'daily')} {t}")
             elif days == {1, 2, 3, 4, 5}:
-                parts.append(f"Weekdays {t}")
+                parts.append(f"{tr(lang, 'weekdays')} {t}")
             elif days == {0, 6}:
-                parts.append(f"Weekends {t}")
+                parts.append(f"{tr(lang, 'weekends')} {t}")
             else:
-                names = "/".join(WEEKDAYS[d] for d in sorted(days))
+                names = "/".join(STRINGS[lang]["days"][d] for d in sorted(days))
                 parts.append(f"{names} {t}")
         return " · ".join(parts)
     if plist.get("KeepAlive"):
-        return "always on"
+        return tr(lang, "always_on")
     if "StartInterval" in plist:
         s = int(plist["StartInterval"])
         if s % 3600 == 0:
-            return f"every {s // 3600}h"
+            return tr(lang, "every", n=f"{s // 3600}h")
         if s % 60 == 0:
-            return f"every {s // 60}m"
-        return f"every {s}s"
-    return "on demand"
+            return tr(lang, "every", n=f"{s // 60}m")
+        return tr(lang, "every", n=f"{s}s")
+    return tr(lang, "on_demand")
 
 
-def next_run_text(plist: dict) -> str:
+def next_run_text(plist: dict, lang: str = "en") -> str:
     cal = plist.get("StartCalendarInterval")
     if not cal:
         return ""
@@ -221,10 +350,10 @@ def next_run_text(plist: dict) -> str:
     if not best:
         return ""
     if best.date() == now.date():
-        return f"today {best:%H:%M}"
+        return f"{tr(lang, 'today')} {best:%H:%M}"
     if best.date() == (now + timedelta(days=1)).date():
-        return f"tomorrow {best:%H:%M}"
-    return f"{best:%a %H:%M}"
+        return f"{tr(lang, 'tomorrow')} {best:%H:%M}"
+    return f"{weekday(lang, best)} {best:%H:%M}"
 
 
 def launchctl_state() -> dict:
@@ -281,8 +410,6 @@ def parse_runs(log: Path) -> list:
             if ln and not ln.startswith(("---", "===", "meta:")):
                 r.summary = ln[:160]
                 break
-        if not r.summary:
-            r.summary = "(no output captured)"
     return runs
 
 
@@ -303,7 +430,7 @@ def find_log(name: str, plist: dict) -> Path | None:
 
 # ---------------------------------------------------------------------- scanning
 
-def scan_workflows(commands: dict) -> list:
+def scan_workflows(commands: dict, lang: str = "en") -> list:
     state = launchctl_state()
     flows = []
     if not LAUNCH_AGENTS.is_dir():
@@ -319,7 +446,7 @@ def scan_workflows(commands: dict) -> list:
             continue
         name = label.rsplit("claude-", 1)[-1] if "claude-" in label else label.split(".")[-1]
         script = next((a for a in data.get("ProgramArguments", []) if "/" in str(a) and "bash" not in str(a) and "python" not in str(a)), args)
-        description = (DESCRIPTIONS.get(name)
+        description = ((tr(lang, DESCRIPTIONS[name], port=PORT) if name in DESCRIPTIONS else "")
                        or commands.get(name, "")
                        or script_blurb(Path(str(script))))
         log = find_log(name, data)
@@ -329,7 +456,7 @@ def scan_workflows(commands: dict) -> list:
             default_model = frontmatter_field(COMMANDS_DIR / f"{name}.md", "model") or CONFIG.get("MODEL", "")
         flows.append(Workflow(
             name=name, label=label, plist=pl,
-            schedule=humanize_schedule(data), next_run=next_run_text(data),
+            schedule=humanize_schedule(data, lang), next_run=next_run_text(data, lang),
             description=description, program=str(script),
             log_path=log, runs=parse_runs(log)[::-1] if log else [],
             loaded=loaded, launchctl_status=status, default_model=default_model,
@@ -435,7 +562,7 @@ def save_dismissed(keys: set):
     DISMISSED_FILE.write_text(json.dumps(sorted(fresh)))
 
 
-def recent_failures(flows: list, days: int = 7) -> list:
+def recent_failures(flows: list, lang: str = "en", days: int = 7) -> list:
     """[(key, text)] for non-dismissed failures in the window."""
     cutoff = datetime.now() - timedelta(days=days)
     dismissed = load_dismissed()
@@ -450,8 +577,8 @@ def recent_failures(flows: list, days: int = 7) -> list:
                 key = f"{f.name}|{r.ts}|{r.exit}"
                 if key in dismissed:
                     continue
-                why = "watchdog timeout" if r.watchdog else f"exit {r.exit}"
-                fails.append((key, f"{r.ts} — {f.name} failed ({why})"))
+                why = tr(lang, "watchdog_timeout") if r.watchdog else tr(lang, "exit", code=r.exit)
+                fails.append((key, tr(lang, "failed", ts=r.ts, name=f.name, why=why)))
     return fails
 
 
@@ -499,8 +626,14 @@ header { display: flex; align-items: baseline; justify-content: space-between;
 h1 { font-family: "Instrument Serif", Georgia, serif; font-style: italic; font-weight: 400;
   font-size: 44px; margin: 0; color: #e9f4e6; letter-spacing: .5px; }
 h1 .tld { color: var(--ok); }
-.meta { text-align: right; color: var(--dim); font-size: 12px; }
+.meta { position: relative; text-align: right; color: var(--dim); font-size: 12px; }
 .meta b { color: var(--ink); font-weight: 500; }
+/* out of flow, so the header's baseline (h1 + clock line) doesn't move */
+.langbtn { position: absolute; right: 0; bottom: calc(100% + 6px);
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--chip); border: 1px solid var(--line); color: var(--dim);
+  border-radius: 99px; padding: 1.5px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
+.langbtn:hover, .langbtn:focus { outline: none; border-color: var(--ok); color: var(--ink); }
 .banner { border: 1px solid #5b2f28; background: #1c1210; color: #f0b9ae;
   padding: 10px 14px; margin: 18px 0 0; border-radius: 6px; font-size: 12.5px; }
 .banner-line { display: flex; align-items: center; gap: 10px; }
@@ -608,7 +741,7 @@ document.addEventListener("change", async ev => {
     ok = r.ok;
   } catch (e) {}
   sel.classList.toggle("err", !ok);
-  sel.title = ok ? "Model for this job — used from its next run" : "could not save the model";
+  sel.title = ok ? sel.dataset.title : sel.dataset.err;
 });
 
 // ---- per-job pause toggle (persists server-side, run-job.sh skips a paused job) ----
@@ -623,7 +756,17 @@ document.addEventListener("click", async ev => {
   } catch (e) {}
   if (ok) return refresh();
   btn.classList.add("err");
-  btn.title = "could not save the pause state";
+  btn.title = btn.dataset.err;
+});
+
+// ---- language toggle (a cookie the server renders from, so refreshes and reloads keep it) ----
+document.addEventListener("click", ev => {
+  const btn = ev.target.closest(".langbtn");
+  if (!btn) return;
+  const lang = btn.dataset.lang;
+  document.cookie = `lang=${lang}; path=/; max-age=31536000; SameSite=Lax`;
+  document.documentElement.lang = lang;
+  refresh();
 });
 
 // ---- matrix rain ----
@@ -702,56 +845,62 @@ async function showQuote(text) {
 """
 
 
-def render_workflow(f: Workflow, models: dict, paused: set) -> str:
+def render_workflow(f: Workflow, models: dict, paused: set, lang: str = "en") -> str:
     last = f.runs[0] if f.runs else None
     if last and last.exit == 0:
         dot, last_txt = "ok", f'<span class="ok">✓</span> {e(last.ts)}'
     elif last and last.exit not in (0, None):
-        dot, last_txt = "err", f'<span class="err">✗</span> {e(last.ts)} (exit {last.exit})'
+        dot, last_txt = "err", f'<span class="err">✗</span> {e(last.ts)} ({e(tr(lang, "exit", code=last.exit))})'
     else:
-        dot, last_txt = ("ok" if f.loaded else "off"), "no runs logged"
+        dot, last_txt = ("ok" if f.loaded else "off"), e(tr(lang, "no_runs"))
     live = " live" if f.loaded else ""
-    nxt = f" · next {e(f.next_run)}" if f.next_run else ""
+    nxt = f" · {e(tr(lang, 'next', when=f.next_run))}" if f.next_run else ""
     schedule = e(f.schedule)
     is_paused = f.default_model is not None and f.name in paused
     if is_paused:
-        dot, live, nxt, schedule = "warn", "", "", f"paused · {schedule}"
-    loaded_txt = "loaded" if f.loaded else '<span class="err">NOT LOADED</span>'
+        dot, live, nxt, schedule = "warn", "", "", e(tr(lang, "paused", schedule=f.schedule))
+    loaded_txt = e(tr(lang, "loaded")) if f.loaded else f'<span class="err">{e(tr(lang, "not_loaded"))}</span>'
 
     ticks = ""
     for r in f.runs[:12][::-1]:
         cls = "ok" if r.ok else ("err" if r.exit is not None else "none")
-        ticks += f'<span class="tick {cls}" title="{e(r.ts)} — exit {e(r.exit)}"></span>'
+        ticks += f'<span class="tick {cls}" title="{e(r.ts)} — {e(tr(lang, "exit", code=r.exit))}"></span>'
     if ticks:
         costs = [r.cost for r in f.runs[:12] if r.cost is not None]
-        spent = f' · ${sum(costs):.2f} spent' if costs else ""
-        ticks = f'<div class="ticks">{ticks}<span class="lbl">last {min(len(f.runs), 12)} runs{spent}</span></div>'
+        spent = f' · {e(tr(lang, "spent", cost=sum(costs)))}' if costs else ""
+        ticks = (f'<div class="ticks">{ticks}<span class="lbl">'
+                 f'{e(tr(lang, "last_runs", n=min(len(f.runs), 12)))}{spent}</span></div>')
 
     hist = ""
     for r in f.runs[:8]:
-        rc = f'<span class="rc-ok">exit 0</span>' if r.ok else f'<span class="rc-err">exit {e(r.exit)}{" · watchdog" if r.watchdog else ""}</span>'
+        if r.ok:
+            rc = f'<span class="rc-ok">{e(tr(lang, "exit", code=0))}</span>'
+        else:
+            wd = f' · {e(tr(lang, "watchdog"))}' if r.watchdog else ""
+            rc = f'<span class="rc-err">{e(tr(lang, "exit", code=r.exit))}{wd}</span>'
         meta = ""
         if r.cost is not None:
-            meta = f'<span class="rmeta">${r.cost:.2f} · {r.turns} turns · {r.dur}s</span>'
-        hist += f'<div class="run"><span class="ts">{e(r.ts)}</span>{rc}{meta}<p>{e(r.summary)}</p></div>'
+            meta = f'<span class="rmeta">${r.cost:.2f} · {e(tr(lang, "turns", n=r.turns))} · {r.dur}s</span>'
+        hist += f'<div class="run"><span class="ts">{e(r.ts)}</span>{rc}{meta}<p>{e(r.summary or tr(lang, "no_output"))}</p></div>'
     if hist:
-        hist = f'<details><summary>run history</summary>{hist}</details>'
+        hist = f'<details><summary>{e(tr(lang, "run_history"))}</summary>{hist}</details>'
 
     model_sel = ""
     if f.default_model is not None:
         picked = models.get(f.name, "")
         choices = MODEL_CHOICES if picked in ("", *MODEL_CHOICES) else (*MODEL_CHOICES, picked)  # hand-edited
-        opts = f'<option value="">default · {e(f.default_model or "Claude Code")}</option>' + "".join(
+        default = tr(lang, "model_default", model=f.default_model or tr(lang, "claude_code"))
+        opts = f'<option value="">{e(default)}</option>' + "".join(
             f'<option value="{e(m)}"{" selected" if m == picked else ""}>{e(m)}</option>' for m in choices)
-        model_sel = (f'<select class="modelsel" data-name="{e(f.name)}" '
-                     f'title="Model for this job — used from its next run">{opts}</select>')
+        title = e(tr(lang, "model_title"))
+        model_sel = (f'<select class="modelsel" data-name="{e(f.name)}" title="{title}" '
+                     f'data-title="{title}" data-err="{e(tr(lang, "model_err"))}">{opts}</select>')
 
     pause_btn = ""
     if f.default_model is not None:
-        state, label, tip = (("true", "resume", "Paused — scheduled and manual runs are skipped until you resume it")
-                             if is_paused else ("false", "pause", "Skip this job's runs until you resume it"))
+        state, label, tip = (("true", "resume", "resume_tip") if is_paused else ("false", "pause", "pause_tip"))
         pause_btn = (f'<button class="pausebtn" data-name="{e(f.name)}" data-paused="{state}" '
-                     f'title="{e(tip)}">{label}</button>')
+                     f'data-err="{e(tr(lang, "pause_err"))}" title="{e(tr(lang, tip))}">{e(tr(lang, label))}</button>')
 
     return f"""
     <div class="card">
@@ -761,22 +910,22 @@ def render_workflow(f: Workflow, models: dict, paused: set) -> str:
         <span class="chip">{schedule}</span>
         {model_sel}
         {pause_btn}
-        <span class="right">last: {last_txt}</span>
+        <span class="right">{e(tr(lang, "last"))} {last_txt}</span>
       </div>
       <p class="desc">{e(f.description) or "&mdash;"}</p>
       {ticks}
       {hist}
-      <div class="kv">{loaded_txt}{nxt} · {e(f.plist.name)} · log: {e(f.log_path.name) if f.log_path else "—"}</div>
+      <div class="kv">{loaded_txt}{nxt} · {e(f.plist.name)} · {e(tr(lang, "log"))} {e(f.log_path.name) if f.log_path else "—"}</div>
     </div>"""
 
 
-def build_html() -> str:
+def build_html(lang: str = "en") -> str:
     commands = load_commands()
-    flows = scan_workflows(commands)
+    flows = scan_workflows(commands, lang)
     models = load_models()
     paused = load_paused()
     hooks = scan_hooks()
-    fails = recent_failures(flows)
+    fails = recent_failures(flows, lang)
     scheduled_names = {f.name for f in flows}
     manual = {n: d for n, d in commands.items() if n not in scheduled_names}
 
@@ -784,13 +933,13 @@ def build_html() -> str:
     if fails:
         lines = "".join(
             f'<div class="banner-line"><span>{e(txt)}</span>'
-            f'<button class="dismiss" data-key="{e(key)}" title="Dismiss">×</button></div>'
+            f'<button class="dismiss" data-key="{e(key)}" title="{e(tr(lang, "dismiss"))}">×</button></div>'
             for key, txt in fails)
         banner = f'<div class="banner">{lines}</div>'
 
     manual_html = "".join(
         f'<div class="card"><div class="row"><span class="dot off"></span>'
-        f'<span class="name">/{e(n)}</span><span class="right">manual</span></div>'
+        f'<span class="name">/{e(n)}</span><span class="right">{e(tr(lang, "manual"))}</span></div>'
         f'<p class="desc">{e(d) or "&mdash;"}</p></div>'
         for n, d in sorted(manual.items()))
 
@@ -801,7 +950,17 @@ def build_html() -> str:
                            f"<td>{e(nm)}</td><td>{e(blurb) or '&mdash;'}</td></tr>")
 
     now = datetime.now()
-    return f"""<!doctype html><html lang="en"><head>
+    today = f"{weekday(lang, now)} {now:%d} {STRINGS[lang]['months'][now.month - 1]}"
+    scanned = tr(lang, "scanned", time=f"{now:%H:%M:%S}")
+    other = "sv" if lang == "en" else "en"
+    switch = e(tr(lang, "lang_switch"))
+    globe = ('<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
+             'stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/>'
+             '<ellipse cx="8" cy="8" rx="3" ry="6.5"/><path d="M1.5 8h13"/></svg>')
+    footer = tr(lang, "footer", config=CONFIG.get("CCYCLOPS_CONFIG") or tr(lang, "footer_config"))
+    no_agents = f'<p class="desc">{e(tr(lang, "no_agents"))}</p>'
+    none = e(tr(lang, "none"))
+    return f"""<!doctype html><html lang="{lang}"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>CCyclops</title>
 <link rel="icon" href="{favicon_href()}">
@@ -813,20 +972,21 @@ def build_html() -> str:
 <div class="wrap">
   <header>
     <h1>CCyclops<span class="tld">.</span></h1>
-    <div class="meta"><b id="clock">{now:%H:%M:%S}</b> · {now:%a %d %b}<br>
-    scanned {now:%H:%M:%S} · auto-refresh 60s</div>
+    <div class="meta"><button class="langbtn" data-lang="{other}" title="{switch}" aria-label="{switch}">{globe}{other.upper()}</button>
+    <b id="clock">{now:%H:%M:%S}</b> · {e(today)}<br>
+    {e(scanned)}</div>
   </header>
   {banner}
-  <section><h2>Scheduled</h2>
-    <p class="sub">launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.</p>
-    {"".join(render_workflow(f, models, paused) for f in flows) or '<p class="desc">No launchd agents found.</p>'}</section>
-  <section class="manual"><h2>Manual commands</h2>
-    <p class="sub">slash commands you run yourself inside a Claude Code session — nothing happens until you type them.</p>
-    {manual_html or '<p class="desc">None.</p>'}</section>
-  <section><h2>Session hooks</h2>
-    <p class="sub">scripts Claude Code fires automatically at the start and end of every session (configured in ~/.claude/settings.json).</p>
-    <table class="hooks">{hooks_html or '<tr><td colspan="3">None.</td></tr>'}</table></section>
-  <footer>settings: {e(CONFIG.get("CCYCLOPS_CONFIG") or "config.sh in your clone")} — edit it, then run ./install.sh · sources: ~/Library/LaunchAgents · ~/.claude/logs · ~/.claude/commands · ~/.claude/settings.json</footer>
+  <section><h2>{e(tr(lang, "scheduled"))}</h2>
+    <p class="sub">{e(tr(lang, "scheduled_sub"))}</p>
+    {"".join(render_workflow(f, models, paused, lang) for f in flows) or no_agents}</section>
+  <section class="manual"><h2>{e(tr(lang, "manual_h"))}</h2>
+    <p class="sub">{e(tr(lang, "manual_sub"))}</p>
+    {manual_html or f'<p class="desc">{none}</p>'}</section>
+  <section><h2>{e(tr(lang, "hooks_h"))}</h2>
+    <p class="sub">{e(tr(lang, "hooks_sub"))}</p>
+    <table class="hooks">{hooks_html or f'<tr><td colspan="3">{none}</td></tr>'}</table></section>
+  <footer>{e(footer)}</footer>
 </div>
 <script>const QUOTES = {json.dumps(load_quotes(), ensure_ascii=False)};</script>
 <script>{JS}</script>
@@ -843,7 +1003,7 @@ def serve(port: int, open_browser: bool):
             if self.path not in ("/", "/index.html"):
                 self.send_error(404)
                 return
-            body = build_html().encode()
+            body = build_html(request_lang(self.headers.get("Cookie", ""))).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -923,9 +1083,10 @@ def main():
     ap.add_argument("--port", type=int, default=PORT)
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--dump", action="store_true", help="print HTML to stdout and exit")
+    ap.add_argument("--lang", choices=tuple(STRINGS), default="en", help="language of --dump")
     args = ap.parse_args()
     if args.dump:
-        print(build_html())
+        print(build_html(args.lang))
     else:
         serve(args.port, not args.no_open)
 
