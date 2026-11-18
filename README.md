@@ -159,7 +159,7 @@ once and show me the output.
 | **You own the control flow** | `launchd` starts each job. `scripts/run-job.sh` (under 200 lines of bash) does the pre-flight checks, the watchdog, the one retry, the exit codes and the notifications. Claude never decides whether a job runs, runs again, or counts as failed. |
 | **Facts come from scripts, not the model** | Commits, meetings and PR lists are gathered by shell scripts and injected into the prompt. Claude writes the summary; it doesn't go looking for what happened. Cheap, reproducible, and you can run every feed by hand. |
 | **A broken feed stops the job** | If a feed errors, the job refuses to write and notifies you (`FEED FAILURE`), instead of producing a note that looks fine but is missing data. |
-| **Every run is capped and accounted for** | A turn cap and a watchdog bound each run. The log and the dashboard show the result, cost, turns, duration and model per run, and you pick the model per job from a dropdown. |
+| **Every run is capped and accounted for** | A turn cap and a watchdog bound each run. The log and the dashboard show the result, cost, turns, duration and model per run, and you pick the model per job from a dropdown. A pause button on each job's card skips its runs until you resume it, and the card turns amber so you see it. |
 | **Local on purpose** | The jobs read your clones, your calendar and your notes, so they run where those are: no server, no database, no credentials handed to a cloud runner. If the Mac is asleep at 09:00, the job runs once when you open the lid. If you're not at the computer, there's no standup to write. |
 | **Plain files all the way down** | A job is one Markdown file and one config line. Output is Markdown in a folder. The dashboard is one stdlib-only Python file. `./install.sh --uninstall` takes it all out again and leaves your notes. |
 
@@ -246,6 +246,7 @@ HOOK_TICKET_LOG=true
 | stop a session hook | `HOOK_TICKET_LOG=false` |
 | notes in another language | `LANGUAGE="Svenska"` |
 | run jobs on a cheaper model | `MODEL="sonnet"` (a command's own `model:` line wins) — or pick one per job in the dashboard's dropdown, which beats both |
+| skip a job for a while | the pause button on its dashboard card — scheduled and hand-started runs exit without running or logging until you press resume (`./install.sh` keeps the pause) |
 | Jira-style ticket keys | `TICKET_PATTERN="[A-Z]+-[0-9]+"` |
 | other dev-server ports to warn about | `DEV_SERVER_PORTS="3000 5173"` |
 

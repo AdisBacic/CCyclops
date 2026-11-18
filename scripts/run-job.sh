@@ -14,7 +14,9 @@
 #                  ~/.claude are always added)
 #   model          model for this job (default: MODEL in config.sh)
 # The dashboard's model dropdown beats both: its picks are kept in
-# ~/.claude/ccyclops/job-models.json ({"<job>": "<model>"}).
+# ~/.claude/ccyclops/job-models.json ({"<job>": "<model>"}). Its pause button
+# keeps ~/.claude/ccyclops/job-paused.json ({"<job>": true}): a paused job
+# exits 0 here before anything runs or is logged, whoever started it.
 # Jobs run from the vault, and whatever the allowlist says, writes only land
 # there: Edit/Write are denied in ~/.claude and PROJECTS_DIR.
 #
@@ -32,6 +34,7 @@ CMD="$HOME/.claude/commands/$JOB.md"
 LOG="$HOME/.claude/logs/$JOB-cron.log"
 CONFIG="$HOME/.claude/ccyclops/config.sh"
 MODELS="$HOME/.claude/ccyclops/job-models.json"
+PAUSED="$HOME/.claude/ccyclops/job-paused.json"
 USAGE_LIMIT=0
 
 # shellcheck source=/dev/null
@@ -40,6 +43,13 @@ USAGE_LIMIT=0
 # claude's own folder, so an npm-installed claude finds its node.
 PATH="$(dirname "${CLAUDE_BIN:-/usr/bin/true}"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
 export PATH
+
+# Paused on the dashboard: skip without a log block, so the run history stays
+# as it was. A missing or malformed file means nothing is paused.
+if jq -e --arg j "$JOB" '.[$j] == true' "$PAUSED" >/dev/null 2>&1; then
+  echo "$JOB is paused — resume it on the dashboard (ccyclops)"
+  exit 0
+fi
 
 fm() {  # fm <key> — a single-line value from the command's frontmatter
   awk -v k="$1" 'NR == 1 { if ($0 != "---") exit; next }
