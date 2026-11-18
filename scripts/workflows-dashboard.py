@@ -1187,12 +1187,19 @@ def serve(port: int, open_browser: bool):
                 return
             if self.path == "/quotes":
                 # JSON only, for the same reason as /model; a body outside 0..64 KB
-                # is refused before anything is read
+                # is refused without being parsed or kept in memory
                 try:
                     ln = int(self.headers.get("Content-Length", 0))
                     if not self.headers.get("Content-Type", "").startswith("application/json"):
                         raise ValueError("not JSON")
                     if not 0 <= ln <= QUOTES_BODY_MAX:
+                        # read the refused body in chunks and drop it: closing with it
+                        # unread resets the connection, and the client never sees the 400
+                        while ln > 0:
+                            chunk = self.rfile.read(min(ln, QUOTES_BODY_MAX))
+                            if not chunk:
+                                break
+                            ln -= len(chunk)
                         raise ValueError("bad Content-Length")
                     req = json.loads(self.rfile.read(ln))
                     res = set_quotes(req.get("quotes"))
