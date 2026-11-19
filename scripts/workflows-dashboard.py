@@ -17,6 +17,8 @@ Usage:
   ccyclops --no-open        don't open the browser
   ccyclops --dump           print the HTML once to stdout (no server)
   ccyclops --dump --lang sv print it in Swedish (the server uses the page's lang cookie instead)
+  ccyclops --dump --bg plain print it with the plain dark background instead of the matrix rain
+                            (the server uses the page's bg cookie instead)
 """
 
 import argparse
@@ -49,6 +51,7 @@ MODEL_CHOICES = ("opus", "sonnet", "haiku")
 MODELS_LOCK = threading.Lock()
 PAUSED_FILE = CLAUDE_DIR / "ccyclops" / "job-paused.json"   # {"<job>": true}
 PAUSED_LOCK = threading.Lock()
+BG_CHOICES = ("rain", "plain")   # page background, per browser by the bg cookie; the first is the default
 
 
 def load_config() -> dict:
@@ -84,6 +87,10 @@ STRINGS = {
         "days": ("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"),
         "months": ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"),
         "lang_switch": "Switch the dashboard to Swedish",
+        "bg_rain": "rain",
+        "bg_plain": "plain",
+        "bg_to_rain": "Switch the background to the matrix rain",
+        "bg_to_plain": "Switch the background to plain dark",
         "scanned": "scanned {time} · auto-refresh 60s",
         "scheduled": "Scheduled",
         "scheduled_sub": "launchd agents that run Claude (or serve this page) automatically — no session or terminal needed.",
@@ -137,6 +144,10 @@ STRINGS = {
         "days": ("sön", "mån", "tis", "ons", "tor", "fre", "lör"),
         "months": ("jan", "feb", "mar", "apr", "maj", "jun", "jul", "aug", "sep", "okt", "nov", "dec"),
         "lang_switch": "Byt panelen till engelska",
+        "bg_rain": "regn",
+        "bg_plain": "mörk",
+        "bg_to_rain": "Byt bakgrunden till matrisregnet",
+        "bg_to_plain": "Byt till en enkel mörk bakgrund",
         "scanned": "skannad {time} · uppdateras var 60:e s",
         "scheduled": "Schemalagt",
         "scheduled_sub": "launchd-agenter som kör Claude (eller serverar den här sidan) automatiskt — ingen session eller terminal behövs.",
@@ -207,6 +218,17 @@ def request_lang(cookie_header: str) -> str:
         return "en"
     m = jar.get("lang")
     return m.value if m and m.value in STRINGS else "en"
+
+
+def request_bg(cookie_header: str) -> str:
+    """The page background from a Cookie header: exactly "rain" or "plain", else "rain"."""
+    jar = SimpleCookie()
+    try:
+        jar.load(cookie_header or "")
+    except CookieError:
+        return BG_CHOICES[0]
+    m = jar.get("bg")
+    return m.value if m and m.value in BG_CHOICES else BG_CHOICES[0]
 
 
 # --------------------------------------------------------------------------- data
@@ -609,6 +631,7 @@ body {
   font: 13.5px/1.55 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 #rain { position: fixed; inset: 0; z-index: -1; opacity: .55; }
+body[data-bg="plain"] #rain { display: none; }
 #quote { position: fixed; right: 28px; top: 50%; transform: translateY(-50%);
   z-index: 0; width: calc((100vw - 960px) / 2 - 56px); max-width: 400px;
   text-align: left; font-size: 14px; line-height: 1.8; color: #9fdf9c;
@@ -629,11 +652,12 @@ h1 .tld { color: var(--ok); }
 .meta { position: relative; text-align: right; color: var(--dim); font-size: 12px; }
 .meta b { color: var(--ink); font-weight: 500; }
 /* out of flow, so the header's baseline (h1 + clock line) doesn't move */
-.langbtn { position: absolute; right: 0; bottom: calc(100% + 6px);
-  display: inline-flex; align-items: center; gap: 5px;
+.pills { position: absolute; right: 0; bottom: calc(100% + 6px);
+  display: flex; gap: 6px; white-space: nowrap; }
+.langbtn, .bgbtn { display: inline-flex; align-items: center; gap: 5px;
   background: var(--chip); border: 1px solid var(--line); color: var(--dim);
   border-radius: 99px; padding: 1.5px 10px; font: inherit; font-size: 11.5px; cursor: pointer; }
-.langbtn:hover, .langbtn:focus { outline: none; border-color: var(--ok); color: var(--ink); }
+.langbtn:hover, .langbtn:focus, .bgbtn:hover, .bgbtn:focus { outline: none; border-color: var(--ok); color: var(--ink); }
 .banner { border: 1px solid #5b2f28; background: #1c1210; color: #f0b9ae;
   padding: 10px 14px; margin: 18px 0 0; border-radius: 6px; font-size: 12.5px; }
 .banner-line { display: flex; align-items: center; gap: 10px; }
@@ -769,6 +793,17 @@ document.addEventListener("click", ev => {
   refresh();
 });
 
+// ---- background toggle (a cookie too; the marker sits on <body>, outside what refresh() swaps) ----
+document.addEventListener("click", ev => {
+  const btn = ev.target.closest(".bgbtn");
+  if (!btn) return;
+  const bg = document.body.dataset.bg === "plain" ? "rain" : "plain";
+  document.cookie = `bg=${bg}; path=/; max-age=31536000; SameSite=Lax`;
+  document.body.dataset.bg = bg;
+  setRain();
+  refresh();
+});
+
 // ---- matrix rain ----
 const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const cv = document.getElementById("rain"), ctx = cv.getContext("2d");
@@ -784,9 +819,9 @@ function resize() {
 }
 resize();
 addEventListener("resize", resize);
-let last = 0;
+let last = 0, rafId = 0;                     // rafId: the one pending frame, 0 = stopped
 function rain(t) {
-  requestAnimationFrame(rain);
+  rafId = requestAnimationFrame(rain);
   if (t - last < 40) return;                 // ~24 fps cap, easy on the battery
   last = t;
   ctx.fillStyle = "rgba(11, 16, 13, 0.045)";  // fading trails (slow fade = longer streams)
@@ -800,7 +835,13 @@ function rain(t) {
     if (y > cv.height && Math.random() > 0.975) drops[i] = 0;
   }
 }
-if (!reduced) requestAnimationFrame(rain);
+const plain = () => document.body.dataset.bg === "plain";
+function setRain() {                         // runs only on the rain background without reduced motion
+  const on = !reduced && !plain();
+  if (on && !rafId) { resize(); rafId = requestAnimationFrame(rain); }
+  else if (!on && rafId) { cancelAnimationFrame(rafId); rafId = 0; }
+}
+setRain();
 
 // ---- quotes decoding in and out of the rain ----
 const qel = document.getElementById("quote");
@@ -809,7 +850,7 @@ const scramble = () => GLYPHS[(Math.random() * GLYPHS.length) | 0];
 async function showQuote(text) {
   const chars = [...text];
   const hold = Math.max(3500, chars.length * 45);       // long quotes stay longer
-  if (reduced) {
+  if (reduced || plain()) {
     qel.textContent = text; qel.style.opacity = 1;
     await sleep(hold);
     qel.style.opacity = 0; await sleep(600); qel.textContent = "";
@@ -919,7 +960,7 @@ def render_workflow(f: Workflow, models: dict, paused: set, lang: str = "en") ->
     </div>"""
 
 
-def build_html(lang: str = "en") -> str:
+def build_html(lang: str = "en", bg: str = "rain") -> str:
     commands = load_commands()
     flows = scan_workflows(commands, lang)
     models = load_models()
@@ -957,6 +998,9 @@ def build_html(lang: str = "en") -> str:
     globe = ('<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" '
              'stroke-width="1.3" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/>'
              '<ellipse cx="8" cy="8" rx="3" ry="6.5"/><path d="M1.5 8h13"/></svg>')
+    other_bg = "plain" if bg == "rain" else "rain"
+    bg_switch = e(tr(lang, f"bg_to_{other_bg}"))
+    bg_label = e(tr(lang, f"bg_{other_bg}"))
     footer = tr(lang, "footer", config=CONFIG.get("CCYCLOPS_CONFIG") or tr(lang, "footer_config"))
     no_agents = f'<p class="desc">{e(tr(lang, "no_agents"))}</p>'
     none = e(tr(lang, "none"))
@@ -966,13 +1010,13 @@ def build_html(lang: str = "en") -> str:
 <link rel="icon" href="{favicon_href()}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
-<style>{CSS}</style></head><body>
+<style>{CSS}</style></head><body data-bg="{bg}">
 <canvas id="rain"></canvas>
 <div id="quote" aria-hidden="true"></div>
 <div class="wrap">
   <header>
     <h1>CCyclops<span class="tld">.</span></h1>
-    <div class="meta"><button class="langbtn" data-lang="{other}" title="{switch}" aria-label="{switch}">{globe}{other.upper()}</button>
+    <div class="meta"><div class="pills"><button class="bgbtn" data-bg="{other_bg}" title="{bg_switch}" aria-label="{bg_switch}">{bg_label}</button><button class="langbtn" data-lang="{other}" title="{switch}" aria-label="{switch}">{globe}{other.upper()}</button></div>
     <b id="clock">{now:%H:%M:%S}</b> · {e(today)}<br>
     {e(scanned)}</div>
   </header>
@@ -1003,7 +1047,8 @@ def serve(port: int, open_browser: bool):
             if self.path not in ("/", "/index.html"):
                 self.send_error(404)
                 return
-            body = build_html(request_lang(self.headers.get("Cookie", ""))).encode()
+            cookie = self.headers.get("Cookie", "")
+            body = build_html(request_lang(cookie), request_bg(cookie)).encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -1084,9 +1129,10 @@ def main():
     ap.add_argument("--no-open", action="store_true")
     ap.add_argument("--dump", action="store_true", help="print HTML to stdout and exit")
     ap.add_argument("--lang", choices=tuple(STRINGS), default="en", help="language of --dump")
+    ap.add_argument("--bg", choices=BG_CHOICES, default=BG_CHOICES[0], help="background of --dump")
     args = ap.parse_args()
     if args.dump:
-        print(build_html(args.lang))
+        print(build_html(args.lang, args.bg))
     else:
         serve(args.port, not args.no_open)
 
