@@ -26,7 +26,7 @@ JOB_CATCHUP="manual"                      # re-orient on the current feature bra
 # ── Features (true / false) ──────────────────────────────────────────────────
 DASHBOARD=true                 # always-on dashboard + CCyclops Dock/Spotlight app
 CALENDAR=true                  # meeting feeds from icalBuddy (brew install ical-buddy)
-NOTIFICATIONS=true             # macOS notification when a scheduled job fails
+NOTIFICATIONS=true             # macOS notifications: a scheduled job failing, the session-end check
 # Session hooks — one line per file in hooks/ (HOOK_<FILE NAME>).
 HOOK_TICKET_CONTEXT=true       # session start: load the ticket note for this branch
 HOOK_TICKET_LOG=true           # session end: append a work-log entry to the ticket note

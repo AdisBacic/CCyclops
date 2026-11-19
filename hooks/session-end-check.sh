@@ -20,7 +20,7 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   [ "${up:-0}" -gt 0 ] && msgs+=("$up unpushed commit(s) on $(git branch --show-current)")
 fi
 
-if [ ${#msgs[@]} -gt 0 ]; then
+if [ ${#msgs[@]} -gt 0 ] && [ "${NOTIFICATIONS:-true}" = true ]; then
   body=$(IFS='; ' ; echo "${msgs[*]}")
   osascript -e "display notification \"${body//\"/\\\"}\" with title \"Claude Code session ended\"" 2>/dev/null
 fi
