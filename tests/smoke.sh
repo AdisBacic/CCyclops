@@ -131,9 +131,19 @@ check "dashboard is branded CCyclops" grep -q "<title>CCyclops</title>" "$SANDBO
 check "its own card says dashboard" grep -q '<span class="name">dashboard</span>' "$SANDBOX/dash.html"
 check "is English by default, with a toggle to Swedish" bash -c \
   'grep -qF "<html lang=\"en\">" "$1" && grep -qF "class=\"langbtn\" data-lang=\"sv\"" "$1" && grep -qF "</svg>SV</button>" "$1"' _ "$SANDBOX/dash.html"
+check "has the matrix rain by default, with a toggle to plain next to the language one" bash -c \
+  'grep -qF "<body data-bg=\"rain\">" "$1" && ! grep -qF "<body data-bg=\"plain\">" "$1" &&
+   grep -qF "<div class=\"pills\"><button class=\"bgbtn\" data-bg=\"plain\" title=\"Switch the background to plain dark\" aria-label=\"Switch the background to plain dark\">plain</button><button class=\"langbtn\"" "$1"' _ "$SANDBOX/dash.html"
+python3 "$C/scripts/workflows-dashboard.py" --dump --bg plain > "$SANDBOX/dash-plain.html"
+check "--bg plain renders the plain background, with the rain hidden by CSS" bash -c \
+  'grep -qF "<body data-bg=\"plain\">" "$1" && grep -qF "body[data-bg=\"plain\"] #rain { display: none; }" "$1" &&
+   grep -qF "class=\"bgbtn\" data-bg=\"rain\" title=\"Switch the background to the matrix rain\"" "$1" && grep -qF ">rain</button>" "$1"' _ "$SANDBOX/dash-plain.html"
+check "--bg takes only rain and plain" bash -c '! python3 "$1" --dump --bg dark 2>/dev/null' _ "$C/scripts/workflows-dashboard.py"
 python3 "$C/scripts/workflows-dashboard.py" --dump --lang sv > "$SANDBOX/dash-sv.html"
 check "--lang sv renders it in Swedish" bash -c \
   'grep -qF "<html lang=\"sv\">" "$1" && grep -qF "<h2>Schemalagt</h2>" "$1" && grep -qF ">pausa</button>" "$1" && grep -qF "fre 16:00" "$1"' _ "$SANDBOX/dash-sv.html"
+check "with the background toggle in Swedish" bash -c \
+  'grep -qF "class=\"bgbtn\" data-bg=\"plain\" title=\"Byt till en enkel mörk bakgrund\" aria-label=\"Byt till en enkel mörk bakgrund\">mörk</button>" "$1"' _ "$SANDBOX/dash-sv.html"
 check "but not the user's own text" bash -c \
   'grep -qF "<span class=\"name\">dashboard</span>" "$1" && grep -qF "<title>CCyclops</title>" "$1"' _ "$SANDBOX/dash-sv.html"
 check "--lang takes only en and sv" bash -c '! python3 "$1" --dump --lang de 2>/dev/null' _ "$C/scripts/workflows-dashboard.py"
@@ -213,6 +223,15 @@ check "a lang=sv cookie serves it in Swedish" bash -c '[[ "$1" == *"<html lang=\
   "$(curl -s -b lang=sv "http://127.0.0.1:$PORT/")"
 check "no cookie or an unknown one serves English" bash -c '[[ "$1" == *"<html lang=\"en\">"* && "$2" == *"<html lang=\"en\">"* && "$2" == *"</svg>SV</button>"* ]]' _ \
   "$(page)" "$(curl -s -b lang=xx "http://127.0.0.1:$PORT/")"
+check "a bg=plain cookie serves the plain background" bash -c '[[ "$1" == *"<body data-bg=\"plain\">"* && "$1" == *"class=\"bgbtn\" data-bg=\"rain\""* ]]' _ \
+  "$(curl -s -b bg=plain "http://127.0.0.1:$PORT/")"
+check "bg=rain, an unknown bg or a malformed cookie serves the rain" bash -c \
+  'for p in "$@"; do [[ "$p" == *"<body data-bg=\"rain\">"* && "$p" == *"class=\"bgbtn\" data-bg=\"plain\""* ]] || exit 1; done' _ \
+  "$(curl -s -b bg=rain "http://127.0.0.1:$PORT/")" "$(curl -s -b bg=xx "http://127.0.0.1:$PORT/")" \
+  "$(curl -s -H 'Cookie: bg="plain' "http://127.0.0.1:$PORT/")"
+untimed() { sed -E 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/hh:mm:ss/g'; }   # the clock and scan time tick between requests
+check "bg=xx serves the same page as no cookie" test \
+  "$(curl -s -b bg=xx "http://127.0.0.1:$PORT/" | untimed)" = "$(page | untimed)"
 check "with no next run" bash -c '[ -n "$1" ] && [[ "$1" != *"next "* ]]' _ "$(page | grep -o '<div class="kv">[^<]*claude-standup.plist')"
 check "and its model dropdown" bash -c '[[ "$1" == *"value=\"opus\" selected"* ]]' _ "$(card standup)"
 e0=$(exits) c0=$(calls)
